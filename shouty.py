@@ -1,5 +1,9 @@
 # -*- coding: utf-8 -*-
 from __future__ import absolute_import, unicode_literals
+
+import logging
+
+from django.apps import AppConfig
 from django.template.base import Variable, VariableDoesNotExist
 from django.template.exceptions import TemplateSyntaxError
 
@@ -9,7 +13,10 @@ except ImportError:
     pass
 
 
-__all__ = ["MissingVariable", "patch"]
+__all__ = ["MissingVariable", "patch", "Shout", "default_app_config"]
+
+
+logger = logging.getLogger(__name__)
 
 
 class MissingVariable(TemplateSyntaxError):
@@ -59,6 +66,9 @@ def patch():
     """
     Monkeypatch the Django Template Language's Variable class, replacing
     the `_resolve_lookup` method with `new_resolve_lookup` in this module.
+
+    Calling it multiple times should be a no-op, and once applied will
+    subsequently continue returning False
     """
     patched = getattr(Variable, "_shouty", False)
     if patched is True:
@@ -66,3 +76,18 @@ def patch():
     Variable._resolve_lookup = new_resolve_lookup
     Variable._shouty = True
     return True
+
+
+class Shout(AppConfig):
+    """
+    Applies the patch automatically if enabled.
+    If `shouty` or `shouty.Shout` is added to INSTALLED_APPS only.
+    """
+    name = "shouty"
+
+    def ready(self):
+        logger.info("Applying shouty templates patch")
+        return patch()
+
+
+default_app_config = "shouty.Shout"
