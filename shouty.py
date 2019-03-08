@@ -38,9 +38,11 @@ BLACKLIST = (
     # a UserSettingsHolder, it doesn't seem to be. I've not looked into
     # it fully, but it's a smashing great error that prevents the debug 500
     # from working otherwise.
+    # TODO: Get fixed upstream?
     "settings.SETTINGS_MODULE",
     # django-debug-toolbar SQL panel, makes use of a dictionary of queries,
     # whose values aren't always available.
+    # TODO: Get fixed upstream?
     "query.starts_trans",
     "query.ends_trans",
     "query.in_trans",
@@ -50,6 +52,13 @@ BLACKLIST = (
     "query.duplicate_color",
     "query.iso_level",
     "query.trans_status",
+    # Django admin
+    # TODO: Get fixed upstream?
+    "is_popup",  # Used all over the shop, but not declared everywhere.
+    "cl.formset.errors",  # Used on the changelist even if there's no formset?
+    "show",  # date_hierarchy for the changelist doesn't actually always return a dictionary ...
+    "cl.formset.is_multipart",  # Used on the changelist even if there's no formset?
+    "result.form.non_field_errors",  # Used on the changelist ...
 )
 
 
@@ -106,7 +115,7 @@ class Shout(AppConfig):
 
     name = "shouty"
 
-    def ready(self):
+    def ready(self) -> bool:
         logger.info("Applying shouty templates patch")
         return patch()
 
