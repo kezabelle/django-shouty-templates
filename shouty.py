@@ -5,6 +5,7 @@ import logging
 
 from django.apps import AppConfig
 from django.template.base import Variable, VariableDoesNotExist
+from django.template.defaulttags import URLNode
 from django.template.exceptions import TemplateSyntaxError
 
 try:
@@ -30,6 +31,7 @@ class MissingVariable(TemplateSyntaxError):
 
 
 old_resolve_lookup = Variable._resolve_lookup
+old_url_render = URLNode.render
 
 
 BLACKLIST = (
@@ -90,6 +92,15 @@ def new_resolve_lookup(self, context):
             raise
 
 
+def new_url_render(self, context):
+    value = old_url_render(self, context)
+    if value == "" and self.asvar is not None:
+        raise MissingVariable(
+            "{{% url ... as {} %}} did not resolve".format(self.asvar)
+        )
+    return value
+
+
 def patch():
     # type: () -> bool
     """
@@ -99,11 +110,14 @@ def patch():
     Calling it multiple times should be a no-op, and once applied will
     subsequently continue returning False
     """
-    patched = getattr(Variable, "_shouty", False)
-    if patched is True:
-        return False
-    Variable._resolve_lookup = new_resolve_lookup
-    Variable._shouty = True
+    patched_var = getattr(Variable, "_shouty", False)
+    if patched_var is False:
+        Variable._resolve_lookup = new_resolve_lookup
+        Variable._shouty = True
+    patched_url = getattr(URLNode, "_shouty", False)
+    if patched_url is False:
+        URLNode.render = new_url_render
+        URLNode._shouty = True
     return True
 
 
