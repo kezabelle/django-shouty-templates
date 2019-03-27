@@ -2,8 +2,10 @@
 from __future__ import absolute_import, unicode_literals
 
 import logging
+from collections import namedtuple
 
 from django.apps import AppConfig
+from django.conf import UserSettingsHolder, settings
 from django.template.base import Variable, VariableDoesNotExist
 from django.template.defaulttags import URLNode
 from django.template.exceptions import TemplateSyntaxError
@@ -34,7 +36,7 @@ old_resolve_lookup = Variable._resolve_lookup
 old_url_render = URLNode.render
 
 
-BLACKLIST = (
+VARIABLE_BLACKLIST = (
     # When trying to render the technical 500 template, it accesses
     # settings.SETTINGS_MODULE, which ordinarily is there. But if using
     # a UserSettingsHolder, it doesn't seem to be. I've not looked into
@@ -64,6 +66,12 @@ BLACKLIST = (
 )
 
 
+def variable_blacklist():
+    # type: () -> tuple
+    # TODO: make this memoized/cached?
+    return VARIABLE_BLACKLIST + tuple(getattr(settings, 'SHOUTY_VARIABLE_BLACKLIST', ()))
+
+
 def new_resolve_lookup(self, context):
     # type: (Variable, Any) -> Any
     """
@@ -75,14 +83,13 @@ def new_resolve_lookup(self, context):
         return old_resolve_lookup(self, context)
     except VariableDoesNotExist as e:
         whole_var = self.var
-        dont_report = BLACKLIST
-        if whole_var not in dont_report:
+        if whole_var not in variable_blacklist():
             part = e.params[0]
             # self.var might be 'request.user.pk' but part might just be 'pk'
             if part != whole_var:
-                msg = "Token '{token}' of '{var}' does not resolve"
+                msg = "Token '{token}' of '{var}' does not resolve - you can silence it by adding '{var}' to settings.SHOUTY_VARIABLE_BLACKLIST"
             else:
-                msg = "Variable '{token}' does not resolve"
+                msg = "Variable '{token}' does not resolve - you can silence it by adding '{var} to settings.SHOUTY_VARIABLE_BLACKLIST"
             msg = msg.format(token=part, var=whole_var)
             raise MissingVariable(msg)
         else:
@@ -92,32 +99,64 @@ def new_resolve_lookup(self, context):
             raise
 
 
+URL_BLACKLIST = (
+    # Admin login
+    ('admin_password_reset', 'password_reset_url'),
+    # Admin header (every page)
+    ('django-admindocs-docroot', 'docsroot'),
+)
+
+def url_blacklist():
+    # type: () -> tuple
+    # TODO: make this memoized/cached?
+    return URL_BLACKLIST + tuple(getattr(settings, 'SHOUTY_URL_BLACKLIST', ()))
+
+
 def new_url_render(self, context):
+    # type: (URLNode, Any) -> Any
+    """
+    Call the original render method, and if it returns nothing AND has been
+    put into the context, raise an exception.
+
+    eg:
+    {% url '...' %} is fine. Will raise NoReverseMatch anyway.
+    {% url '...' as x %} is fine if ... resolves.
+    {% url '...' as x %} will now blow up if ... doesn't put something sensible
+    into the context (it should've thrown a NoReverseMatch)
+    """
     value = old_url_render(self, context)
-    if value == "" and self.asvar is not None:
-        raise MissingVariable(
-            "{{% url ... as {} %}} did not resolve".format(self.asvar)
-        )
+    outvar = self.asvar
+    if outvar is not None and context[outvar] == "":
+        key = (str(self.view_name.var), outvar)
+        if key not in url_blacklist():
+            raise MissingVariable(
+                '{{% url {token!s} ... as {asvar!s} %}} did not resolve - you can silence it by adding {key!r} to settings.SHOUTY_URL_BLACKLIST'.format(token=self.view_name, asvar=self.asvar, key=key)
+            )
     return value
 
 
-def patch():
-    # type: () -> bool
+def patch(invalid_variables, invalid_urls):
+    # type: (bool, bool) -> bool
     """
     Monkeypatch the Django Template Language's Variable class, replacing
     the `_resolve_lookup` method with `new_resolve_lookup` in this module.
 
-    Calling it multiple times should be a no-op, and once applied will
-    subsequently continue returning False
+    Also allows for turning on loud errors if using `{% url ... as outvar %}`
+    where the url resolved to nothing.
+
+    Calling it multiple times should be a no-op
     """
     patched_var = getattr(Variable, "_shouty", False)
-    if patched_var is False:
-        Variable._resolve_lookup = new_resolve_lookup
-        Variable._shouty = True
+    if invalid_variables is True:
+        if patched_var is False:
+            Variable._resolve_lookup = new_resolve_lookup
+            Variable._shouty = True
+
     patched_url = getattr(URLNode, "_shouty", False)
-    if patched_url is False:
-        URLNode.render = new_url_render
-        URLNode._shouty = True
+    if invalid_urls is True:
+        if patched_url is False:
+            URLNode.render = new_url_render
+            URLNode._shouty = True
     return True
 
 
@@ -126,12 +165,14 @@ class Shout(AppConfig):
     Applies the patch automatically if enabled.
     If `shouty` or `shouty.Shout` is added to INSTALLED_APPS only.
     """
-
     name = "shouty"
 
     def ready(self) -> bool:
         logger.info("Applying shouty templates patch")
-        return patch()
+        return patch(
+            invalid_variables=getattr(settings, "SHOUTY_VARIABLES", True),
+            invalid_urls=getattr(settings, "SHOUTY_URLS", True),
+        )
 
 
 default_app_config = "shouty.Shout"
