@@ -32,6 +32,7 @@ check: dist
 release:
 	@echo "INSTRUCTIONS:"
 	@echo "- pip install wheel twine"
+	@echo "- make check"
 	@echo "- python setup.py sdist bdist_wheel"
 	@echo "- ls dist/"
 	@echo "- twine register dist/???"

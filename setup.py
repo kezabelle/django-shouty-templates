@@ -21,9 +21,9 @@ def make_readme(root_path):
                 yield f.read()
 
 LICENSE = "BSD License"
-URL = ""
+URL = "https://github.com/kezabelle/django-shouty-templates"
 LONG_DESCRIPTION = "\r\n\r\n----\r\n\r\n".join(make_readme(HERE))
-SHORT_DESCRIPTION = ""
+SHORT_DESCRIPTION = "Applies a monkeypatch which forces Django's template language to error far more loudly about invalid assumptions"
 KEYWORDS = (
     "django",
     "templates",
@@ -55,8 +55,12 @@ setup(
         "Intended Audience :: Developers",
         "License :: OSI Approved :: {}".format(LICENSE),
         "Natural Language :: English",
+        "Programming Language :: Python",
         "Programming Language :: Python :: 2",
+        "Programming Language :: Python :: 2.7",
         "Programming Language :: Python :: 3",
+        "Programming Language :: Python :: 3.5",
+        "Programming Language :: Python :: 3.6",
         "Framework :: Django",
     ],
 )
