@@ -33,7 +33,7 @@ KEYWORDS = (
 
 setup(
     name="django-shouty-templates",
-    version="0.1.0",
+    version="0.1.1",
     author="Keryn Knight",
     author_email="django-shouty-templates@kerynknight.com",
     maintainer="Keryn Knight",
