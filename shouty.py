@@ -16,7 +16,15 @@ except ImportError:
     pass
 
 
-__all__ = ["MissingVariable", "patch", "Shout", "default_app_config"]
+__version_info__ = '0.1.0'
+__version__ = '0.1.0'
+version = '0.1.0'
+VERSION = '0.1.0'
+
+def get_version():
+    return version
+
+__all__ = ["MissingVariable", "patch", "Shout", "default_app_config", "get_version"]
 
 
 logger = logging.getLogger(__name__)
