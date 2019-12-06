@@ -175,7 +175,8 @@ class Shout(AppConfig):
     """
     name = "shouty"
 
-    def ready(self) -> bool:
+    def ready(self)
+        # type: () -> bool
         logger.info("Applying shouty templates patch")
         return patch(
             invalid_variables=getattr(settings, "SHOUTY_VARIABLES", True),
