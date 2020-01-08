@@ -66,6 +66,8 @@ VARIABLE_BLACKLIST = (
     "query.trans_status",
     # Django admin
     # TODO: Get fixed upstream?
+    "model.add_url", # used on the site/app index
+    "model.admin_url", # used on the site/app index
     "is_popup",  # Used all over the shop, but not declared everywhere.
     "cl.formset.errors",  # Used on the changelist even if there's no formset?
     "show",  # date_hierarchy for the changelist doesn't actually always return a dictionary ...
