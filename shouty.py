@@ -73,6 +73,13 @@ VARIABLE_BLACKLIST = (
     "show",  # date_hierarchy for the changelist doesn't actually always return a dictionary ...
     "cl.formset.is_multipart",  # Used on the changelist even if there's no formset?
     "result.form.non_field_errors",  # Used on the changelist ...
+    # Django's technical 500 templates (text & html) via get_traceback_data
+    "exception_type",
+    "exception_value",
+    "lastframe",
+    "request_GET_items",
+    "request_FILES_items",
+    "request_COOKIES_items",
 )
 
 
@@ -99,7 +106,7 @@ def new_resolve_lookup(self, context):
             if part != whole_var:
                 msg = "Token '{token}' of '{var}' does not resolve - you can silence it by adding '{var}' to settings.SHOUTY_VARIABLE_BLACKLIST"
             else:
-                msg = "Variable '{token}' does not resolve - you can silence it by adding '{var} to settings.SHOUTY_VARIABLE_BLACKLIST"
+                msg = "Variable '{token}' does not resolve - you can silence it by adding '{var}' to settings.SHOUTY_VARIABLE_BLACKLIST"
             msg = msg.format(token=part, var=whole_var)
             raise MissingVariable(msg)
         else:
