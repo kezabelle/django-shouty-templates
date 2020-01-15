@@ -73,6 +73,9 @@ VARIABLE_BLACKLIST = (
     "show",  # date_hierarchy for the changelist doesn't actually always return a dictionary ...
     "cl.formset.is_multipart",  # Used on the changelist even if there's no formset?
     "result.form.non_field_errors",  # Used on the changelist ...
+    "can_change_related",  # Used by related_widget_wrapper
+    "can_add_related",  # Used by related_widget_wrapper
+    "can_delete_related",  # Used by related_widget_wrapper
     # Django's technical 500 templates (text & html) via get_traceback_data
     "exception_type",
     "exception_value",
