@@ -187,7 +187,7 @@ class Shout(AppConfig):
     """
     name = "shouty"
 
-    def ready(self)
+    def ready(self):
         # type: () -> bool
         logger.info("Applying shouty templates patch")
         return patch(
