@@ -16,10 +16,10 @@ except ImportError:
     pass
 
 
-__version_info__ = '0.1.1'
-__version__ = '0.1.1'
-version = '0.1.1'
-VERSION = '0.1.1'
+__version_info__ = '0.1.2'
+__version__ = '0.1.2'
+version = '0.1.2'
+VERSION = '0.1.2'
 
 def get_version():
     return version

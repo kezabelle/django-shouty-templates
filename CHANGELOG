@@ -1,7 +1,6 @@
 Change history for django-shouty-templates
 ------------------------------------------
-
-?next?
+0.1.2
 ^^^^^^
 * Feature: Added 11 new tokens to the default blacklist, covering more of the default Django admin and the default exception reporter.
 * Bugfix: Changed the syntax of the `AppConfig.ready` method to be py2 type annotation compatible.
