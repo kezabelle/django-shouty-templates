@@ -83,6 +83,10 @@ VARIABLE_BLACKLIST = (
     "request_GET_items",
     "request_FILES_items",
     "request_COOKIES_items",
+    # Django's "debug" context processor only fills debug and sql_queries if
+    # DEBUG=True and the user's IP is in INTERNAL_IPS
+    "debug",
+    "sql_queries",
 )
 
 

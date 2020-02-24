@@ -1,5 +1,10 @@
 Change history for django-shouty-templates
 ------------------------------------------
+
+?next?
+^^^^^^
+* Feature: Silenced errors when using `debug` or `sql_queries` in a template, as they're conditionally set by `django.template.context_processors.debug`
+
 0.1.2
 ^^^^^^
 * Feature: Added 11 new tokens to the default blacklist, covering more of the default Django admin and the default exception reporter.

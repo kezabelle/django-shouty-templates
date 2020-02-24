@@ -4,3 +4,4 @@ dist
 *.pyc.coverage
 *.egg*
 .mypy_cache
+build/*
