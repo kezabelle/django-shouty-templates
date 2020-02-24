@@ -1,7 +1,6 @@
 Change history for django-shouty-templates
 ------------------------------------------
-
-?next?
+0.1.3
 ^^^^^^
 * Feature: Silenced errors when using `debug` or `sql_queries` in a template, as they're conditionally set by `django.template.context_processors.debug`
 
