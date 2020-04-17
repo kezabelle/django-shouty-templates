@@ -11,7 +11,7 @@ from django.template.defaulttags import URLNode
 from django.template.exceptions import TemplateSyntaxError
 
 try:
-    from typing import Any
+    from typing import Any, Tuple, Text
 except ImportError:
     pass
 
@@ -87,11 +87,11 @@ VARIABLE_BLACKLIST = (
     # DEBUG=True and the user's IP is in INTERNAL_IPS
     "debug",
     "sql_queries",
-)
+)  # type: Tuple[Text, ...]
 
 
 def variable_blacklist():
-    # type: () -> tuple
+    # type: () -> Tuple[Text, ...]
     # TODO: make this memoized/cached?
     return VARIABLE_BLACKLIST + tuple(getattr(settings, 'SHOUTY_VARIABLE_BLACKLIST', ()))
 
@@ -129,10 +129,10 @@ URL_BLACKLIST = (
     ('admin_password_reset', 'password_reset_url'),
     # Admin header (every page)
     ('django-admindocs-docroot', 'docsroot'),
-)
+)  # type: Tuple[Tuple[Text, Text], ...]
 
 def url_blacklist():
-    # type: () -> tuple
+    # type: () -> Tuple[Tuple[Text, Text], ...]
     # TODO: make this memoized/cached?
     return URL_BLACKLIST + tuple(getattr(settings, 'SHOUTY_URL_BLACKLIST', ()))
 
