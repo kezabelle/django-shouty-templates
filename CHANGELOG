@@ -4,6 +4,7 @@ Change history for django-shouty-templates
 ?next?
 ^^^^^^
 * Feature: the patch methods themselves (``new_resolve_lookup`` and ``new_url_render``) are skipped during rendering the debug error page. The exception message and functionality remain the same.
+* Feature: exception messages now attempt to clarify what template name (loader relative) was rendering when the missing variable was encountered.
 * Chore: Updated the ``mypy`` type signatures for some of the variables and methods to indicate the only values I'm expecting to accept.
 
 0.1.3

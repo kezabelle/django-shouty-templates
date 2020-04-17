@@ -6,12 +6,12 @@ from collections import namedtuple
 
 from django.apps import AppConfig
 from django.conf import UserSettingsHolder, settings
-from django.template.base import Variable, VariableDoesNotExist
+from django.template.base import Variable, VariableDoesNotExist, UNKNOWN_SOURCE
 from django.template.defaulttags import URLNode
 from django.template.exceptions import TemplateSyntaxError
 
 try:
-    from typing import Any, Tuple, Text
+    from typing import Any, Tuple, Text, Optional
 except ImportError:
     pass
 
@@ -109,13 +109,19 @@ def new_resolve_lookup(self, context):
         __traceback_hide__ = settings.DEBUG
         whole_var = self.var
         if whole_var not in variable_blacklist():
+            try:
+                template_name = context.template.origin.template_name  # type: Optional[Text]
+            except AttributeError:
+                template_name = None
+            if not template_name:
+                template_name = UNKNOWN_SOURCE
             part = e.params[0]
             # self.var might be 'request.user.pk' but part might just be 'pk'
             if part != whole_var:
-                msg = "Token '{token}' of '{var}' does not resolve - you can silence it by adding '{var}' to settings.SHOUTY_VARIABLE_BLACKLIST"
+                msg = "Token '{token}' of '{var}' in template '{template}' does not resolve.\nYou may silence this by adding '{var}' to settings.SHOUTY_VARIABLE_BLACKLIST"
             else:
-                msg = "Variable '{token}' does not resolve - you can silence it by adding '{var}' to settings.SHOUTY_VARIABLE_BLACKLIST"
-            msg = msg.format(token=part, var=whole_var)
+                msg = "Variable '{token}' in template '{template}' does not resolve.\nYou may silence this by adding '{var}' to settings.SHOUTY_VARIABLE_BLACKLIST"
+            msg = msg.format(token=part, var=whole_var, template=template_name)
             raise MissingVariable(msg)
         else:
             # Let the VariableDoesNotExist bubble back up to whereever it's
@@ -155,8 +161,14 @@ def new_url_render(self, context):
         __traceback_hide__ = settings.DEBUG
         key = (str(self.view_name.var), outvar)
         if key not in url_blacklist():
+            try:
+                template_name = context.template.origin.template_name  # type: Optional[Text]
+            except AttributeError:
+                template_name = None
+            if not template_name:
+                template_name = UNKNOWN_SOURCE
             raise MissingVariable(
-                '{{% url {token!s} ... as {asvar!s} %}} did not resolve - you can silence it by adding {key!r} to settings.SHOUTY_URL_BLACKLIST'.format(token=self.view_name, asvar=self.asvar, key=key)
+                "{{% url {token!s} ... as {asvar!s} %}} in template '{template} did not resolve.\nYou may silence this by adding {key!r} to settings.SHOUTY_URL_BLACKLIST".format(token=self.view_name, asvar=self.asvar, key=key, template=template_name)
             )
     return value
 
