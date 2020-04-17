@@ -106,6 +106,7 @@ def new_resolve_lookup(self, context):
     try:
         return old_resolve_lookup(self, context)
     except VariableDoesNotExist as e:
+        __traceback_hide__ = settings.DEBUG
         whole_var = self.var
         if whole_var not in variable_blacklist():
             part = e.params[0]
@@ -151,6 +152,7 @@ def new_url_render(self, context):
     value = old_url_render(self, context)
     outvar = self.asvar
     if outvar is not None and context[outvar] == "":
+        __traceback_hide__ = settings.DEBUG
         key = (str(self.view_name.var), outvar)
         if key not in url_blacklist():
             raise MissingVariable(
