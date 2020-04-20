@@ -1,5 +1,10 @@
 Change history for django-shouty-templates
 ------------------------------------------
+
+?next?
+^^^^^^
+* Bugfix: patch methods hidden from the debug error page should now be consistently hidden always, rather than dependant on hitting the expected branch.
+
 0.1.4
 ^^^^^^
 * Feature: the patch methods themselves (``new_resolve_lookup`` and ``new_url_render``) are skipped during rendering the debug error page. The exception message and functionality remain the same.

@@ -103,10 +103,10 @@ def new_resolve_lookup(self, context):
     which would ordinarily be suppressed by the Django Template Language,
     instead re-format it and re-raise it as another, uncaught exception type.
     """
+    __traceback_hide__ = settings.DEBUG
     try:
         return old_resolve_lookup(self, context)
     except VariableDoesNotExist as e:
-        __traceback_hide__ = settings.DEBUG
         whole_var = self.var
         if whole_var not in variable_blacklist():
             try:
@@ -155,10 +155,10 @@ def new_url_render(self, context):
     {% url '...' as x %} will now blow up if ... doesn't put something sensible
     into the context (it should've thrown a NoReverseMatch)
     """
+    __traceback_hide__ = settings.DEBUG
     value = old_url_render(self, context)
     outvar = self.asvar
     if outvar is not None and context[outvar] == "":
-        __traceback_hide__ = settings.DEBUG
         key = (str(self.view_name.var), outvar)
         if key not in url_blacklist():
             try:
