@@ -3,15 +3,18 @@ from __future__ import absolute_import, unicode_literals
 
 import logging
 from collections import namedtuple
+from difflib import get_close_matches
 
 from django.apps import AppConfig
-from django.conf import UserSettingsHolder, settings
+from django.conf import settings
+from django.template import Context
 from django.template.base import Variable, VariableDoesNotExist, UNKNOWN_SOURCE
+from django.template.context import BaseContext
 from django.template.defaulttags import URLNode
 from django.template.exceptions import TemplateSyntaxError
 
 try:
-    from typing import Any, Tuple, Text, Optional
+    from typing import Any, Tuple, Text, Optional, Type, Set, Dict, List
 except ImportError:
     pass
 
@@ -96,6 +99,75 @@ def variable_blacklist():
     return VARIABLE_BLACKLIST + tuple(getattr(settings, 'SHOUTY_VARIABLE_BLACKLIST', ()))
 
 
+def create_exception_with_template_debug(context, part, exception_cls):
+    # type: (Context, Text, Type[TemplateSyntaxError]) -> Tuple[Optional[Text], Optional[Dict[Text, Any]]]
+    """
+    Between Django 2.0 and Django 3.x at least, painting template exceptions
+    can do so via the "wrong" template, which highlights nothing.
+
+    Pretty sure it has also done them wrong in niche cases throughout the 1.x
+    lifecycle, as I've got utterly used to ignoring that area of the technical 500.
+
+    Anyway, this method attempts to make up for that for our loud error messages
+    by eagerly binding what might hopefully be the right candidate variable/url
+    to the exception attribute searched for by Django.
+
+    This is still only going to be correct sometimes, because the same variable
+    might appear multiple times in a template (or set of templates) and may also
+    appear in both line & block comments which won't actually trigger an exception.
+
+    False positives abound!
+
+    https://code.djangoproject.com/ticket/31478
+    https://code.djangoproject.com/ticket/28935
+    https://code.djangoproject.com/ticket/27956
+    """
+    __traceback_hide__ = settings.DEBUG
+    faketoken = namedtuple("faketoken", "position")
+    if (
+        "extends_context" in context.render_context
+        and context.render_context["extends_context"]
+    ):
+        for parent in context.render_context.get("extends_context", []):
+            _template, _origin = context.template.engine.find_template(
+                parent.template_name, skip=None,
+            )
+
+            # Because Django doesn't allow multi-line stuff, we know if we don't
+            # see one of those we're probably in a block comment? And if we see
+            # #} on this line we're probably in a line comment?
+            src = _template.source  # type: Text
+            lines = src.splitlines()  # type: List[Text]
+            for line in lines:
+                if part not in line:
+                    continue
+                if "}}" not in line and "%}" not in line:
+                    continue
+
+                # Line comment wrapping over it.
+                active_line_start = line.find(part)  # type: int
+                # We need to make sure that the {# and #} appear to the left & right of our part
+                if (
+                    "{#" in line
+                    and "#}" in line
+                    and line.find("{#") < active_line_start
+                    and line.find("#}") > active_line_start
+                ):
+                    continue
+
+                line_start = src.find(line)  # type: int
+                start = src.find(part, line_start)  # type: int
+                if start > -1:
+                    end = start + len(part)
+                    exc_info = _template.get_exception_info(
+                        exception_cls("ignored"), faketoken(position=(start, end))
+                    )  # type: Dict[Text, Any]
+                    template_name = _origin.template_name  # type: Optional[Text]
+                    del _template, _origin, start, end
+                    return template_name, exc_info
+    return None, None
+
+
 def new_resolve_lookup(self, context):
     # type: (Variable, Any) -> Any
     """
@@ -110,19 +182,48 @@ def new_resolve_lookup(self, context):
         whole_var = self.var
         if whole_var not in variable_blacklist():
             try:
-                template_name = context.template.origin.template_name  # type: Optional[Text]
-            except AttributeError:
-                template_name = None
-            if not template_name:
+                template_name, exc_info = create_exception_with_template_debug(
+                    context, whole_var, MissingVariable
+                )
+                if not template_name:
+                    template_name = UNKNOWN_SOURCE
+            except Exception as e2:
+                logger.warning(
+                    "failed to create template_debug information", exc_info=e2
+                )
+                # In case my code is terrible, and raises an exception, let's
+                # just carry on and let Django try for itself to set up relevant
+                # debug info
                 template_name = UNKNOWN_SOURCE
-            part = e.params[0]
-            # self.var might be 'request.user.pk' but part might just be 'pk'
-            if part != whole_var:
-                msg = "Token '{token}' of '{var}' in template '{template}' does not resolve.\nYou may silence this by adding '{var}' to settings.SHOUTY_VARIABLE_BLACKLIST"
+                exc_info = None
+            bit = e.params[0]  # type: Text
+            current = e.params[1]
+            if isinstance(current, BaseContext):
+                possibilities = current.flatten().keys()
             else:
-                msg = "Variable '{token}' in template '{template}' does not resolve.\nYou may silence this by adding '{var}' to settings.SHOUTY_VARIABLE_BLACKLIST"
-            msg = msg.format(token=part, var=whole_var, template=template_name)
-            raise MissingVariable(msg)
+                possibilities = [x for x in dir(current) if not x[0] == "_"]
+            # self.var might be 'request.user.pk' but part might just be 'pk'
+            if bit != whole_var:
+                msg = "Token '{token}' of '{var}' in template '{template}' does not resolve."
+            else:
+                msg = "Variable '{token}' in template '{template}' does not resolve."
+            closest = get_close_matches(bit, possibilities)
+            if len(closest) > 1:
+                msg += "\nPossibly you meant one of: '{closest_matches}'."
+            elif closest:
+                msg += "\nPossibly you meant to use '{closest_matches}'."
+            msg += "\nYou may silence this by adding '{var}' to settings.SHOUTY_VARIABLE_BLACKLIST"
+            msg = msg.format(
+                token=bit,
+                var=whole_var,
+                template=template_name,
+                closest_matches="', '".join(closest),
+            )
+            exc = MissingVariable(msg)
+            if context.template.engine.debug and exc_info is not None:
+                exc_info["message"] = msg
+                exc.template_debug = exc_info
+            raise exc
         else:
             # Let the VariableDoesNotExist bubble back up to whereever it's
             # actually suppressed, to avoid having to decide wtf value to
@@ -162,14 +263,28 @@ def new_url_render(self, context):
         key = (str(self.view_name.var), outvar)
         if key not in url_blacklist():
             try:
-                template_name = context.template.origin.template_name  # type: Optional[Text]
-            except AttributeError:
-                template_name = None
-            if not template_name:
+                template_name, exc_info = create_exception_with_template_debug(
+                    context, outvar, MissingVariable
+                )
+                if not template_name:
+                    template_name = UNKNOWN_SOURCE
+            except Exception as e2:
+                logger.warning(
+                    "failed to create template_debug information", exc_info=e2
+                )
+                # In case my code is terrible, and raises an exception, let's
+                # just carry on and let Django try for itself to set up relevant
+                # debug info
                 template_name = UNKNOWN_SOURCE
-            raise MissingVariable(
-                "{{% url {token!s} ... as {asvar!s} %}} in template '{template} did not resolve.\nYou may silence this by adding {key!r} to settings.SHOUTY_URL_BLACKLIST".format(token=self.view_name, asvar=self.asvar, key=key, template=template_name)
+                exc_info = None
+            msg = "{{% url {token!s} ... as {asvar!s} %}} in template '{template} did not resolve.\nYou may silence this by adding {key!r} to settings.SHOUTY_URL_BLACKLIST".format(
+                token=self.view_name, asvar=outvar, key=key, template=template_name,
             )
+            exc = MissingVariable(msg)
+            if context.template.engine.debug and exc_info is not None:
+                exc_info["message"] = msg
+                exc.template_debug = exc_info
+            raise exc
     return value
 
 
