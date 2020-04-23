@@ -3,6 +3,11 @@ from __future__ import absolute_import, unicode_literals
 
 import logging
 from collections import namedtuple
+
+try:
+    from collections.abc import Sized
+except ImportError:
+    from collections import Sized
 from difflib import get_close_matches
 
 from django.apps import AppConfig
@@ -12,6 +17,7 @@ from django.template.base import Variable, VariableDoesNotExist, UNKNOWN_SOURCE
 from django.template.context import BaseContext
 from django.template.defaulttags import URLNode
 from django.template.exceptions import TemplateSyntaxError
+from django.forms import Form
 
 try:
     from typing import Any, Tuple, Text, Optional, Type, Set, Dict, List
@@ -198,16 +204,42 @@ def new_resolve_lookup(self, context):
                 exc_info = None
             bit = e.params[0]  # type: Text
             current = e.params[1]
+
             if isinstance(current, BaseContext):
-                possibilities = current.flatten().keys()
+                possibilities = set(current.flatten().keys())
+            elif hasattr(current, "keys") and callable(current.keys):
+                possibilities = set(current.keys())
+            elif isinstance(current, Sized) and bit.isdigit():
+                possibilities = set(str(x) for x in range(0, len(current)))
+            elif isinstance(current, Form):
+                possibilities = set(current.fields.keys())
             else:
-                possibilities = [x for x in dir(current) if not x[0] == "_"]
+                possibilities = set()
+            possibilities = {x for x in possibilities if not x[0] == "_"} | {
+                x for x in dir(current) if not x[0] == "_"
+            }
+
+            # maybe you typed csrf_token instead of CSRF_TOKEN or what-have-you.
+            # But difflib considers case when calculating close matches.
+            # So we'll compare everything lower-case, and convert back...
+            # Based on https://stackoverflow.com/q/11384714
+            possibilities_mapped = {poss.lower(): poss for poss in possibilities}
+
             # self.var might be 'request.user.pk' but part might just be 'pk'
             if bit != whole_var:
                 msg = "Token '{token}' of '{var}' in template '{template}' does not resolve."
             else:
                 msg = "Variable '{token}' in template '{template}' does not resolve."
-            closest = get_close_matches(bit, possibilities)
+            # Find close names case-insensitively, and if there are any, map
+            # them back to their original case/form (so that "csrf_token"
+            # might map back to "CSRF_TOKEN" or "Csrf_Token")
+            closest = get_close_matches(bit.lower(), possibilities_mapped.keys())
+            if closest:
+                closest = [
+                    possibilities_mapped[match]
+                    for match in closest
+                    if match in possibilities_mapped
+                ]
             if len(closest) > 1:
                 msg += "\nPossibly you meant one of: '{closest_matches}'."
             elif closest:
