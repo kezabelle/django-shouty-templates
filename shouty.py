@@ -39,7 +39,7 @@ __all__ = ["MissingVariable", "patch", "Shout", "default_app_config", "get_versi
 logger = logging.getLogger(__name__)
 
 
-class MissingVariable(TemplateSyntaxError):
+class MissingVariable(TemplateSyntaxError):  # type: ignore
     """
     Django will raise TemplateSyntaxError in various scenarios, so this
     subclass is used to differentiate shouty errors, while still getting the
@@ -345,7 +345,7 @@ def patch(invalid_variables, invalid_urls):
     return True
 
 
-class Shout(AppConfig):
+class Shout(AppConfig):  # type: ignore
     """
     Applies the patch automatically if enabled.
     If `shouty` or `shouty.Shout` is added to INSTALLED_APPS only.
@@ -362,3 +362,238 @@ class Shout(AppConfig):
 
 
 default_app_config = "shouty.Shout"
+
+
+if __name__ == "__main__":
+    from django.test import TestCase
+    from django.test.runner import DiscoverRunner
+    import django
+    from django.conf import settings as test_settings
+
+    test_settings.configure(
+        DATABASES={
+            "default": {"ENGINE": "django.db.backends.sqlite3", "NAME": ":memory:"}
+        },
+        INSTALLED_APPS=(
+            "django.contrib.contenttypes",
+            "django.contrib.auth",
+            "django.contrib.messages",
+            "django.contrib.admin",
+            "shouty",
+        ),
+        MIDDLEWARE=(
+            "django.contrib.auth.middleware.AuthenticationMiddleware",
+            "django.contrib.messages.middleware.MessageMiddleware",
+            "django.contrib.sessions.middleware.SessionMiddleware",
+        ),
+        TEMPLATES=[
+            {
+                "BACKEND": "django.template.backends.django.DjangoTemplates",
+                "DIRS": [],
+                "APP_DIRS": True,
+                "OPTIONS": {
+                    "context_processors": (
+                        "django.contrib.auth.context_processors.auth",
+                        "django.contrib.messages.context_processors.messages",
+                    )
+                },
+            },
+        ],
+        SHOUTY_VARIABLES=True,
+        SHOUTY_URLS=True,
+    )
+    django.setup()
+    from django.template import Template as TMPL, Context as CTX
+    from django.forms import IntegerField
+
+    class BasicUsageTestCase(TestCase):  # type: ignore
+        def setUp(self):
+            # type: () -> None
+            from shouty import MissingVariable
+
+            self.MissingVariable = MissingVariable
+
+        def test_most_basic(self):
+            # type: () -> None
+            t = TMPL(
+                """
+                this works: {{ a }}
+                this does not work: {{ b }}
+                """
+            )
+            exc = (
+                "Variable 'b' in template '<unknown source>' does not resolve.\n"
+                "Possibly you meant to use 'be'.\n"
+                "You may silence this by adding 'b' to settings.SHOUTY_VARIABLE_BLACKLIST"
+            )
+            with self.assertRaisesMessage(self.MissingVariable, exc):
+                t.render(CTX({"a": 1, "be": 2}))
+
+        def test_nested_tokens_on_dict(self):
+            # type: () -> None
+            t = TMPL(
+                """
+                this works: {{ a }}
+                this works: {{ a.b }}
+                this does not work: {{ a.b.c }}
+                """
+            )
+            exc = (
+                "Token 'c' of 'a.b.c' in template '<unknown source>' does not resolve.\n"
+                "Possibly you meant to use 'cd'.\n"
+                "You may silence this by adding 'a.b.c' to settings.SHOUTY_VARIABLE_BLACKLIST"
+            )
+            with self.assertRaisesMessage(self.MissingVariable, exc):
+                t.render(CTX({"a": {"b": {"cd": 1}}}))
+
+        def test_nested_tokens_on_namedtuple(self):
+            # type: () -> None
+            t = TMPL(
+                """
+                this works: {{ a }}
+                this works: {{ a.b }}
+                this does not work: {{ a.b.c }}
+                """
+            )
+            nt = namedtuple("nt", "cd ce cf cg")(cd=1, ce=2, cf=3, cg=4)  # type: ignore
+            exc = (
+                "Token 'c' of 'a.b.c' in template '<unknown source>' does not resolve.\n"
+                "Possibly you meant one of: 'cg', 'cf', 'ce'.\n"
+                "You may silence this by adding 'a.b.c' to settings.SHOUTY_VARIABLE_BLACKLIST"
+            )
+            with self.assertRaisesMessage(self.MissingVariable, exc):
+                t.render(CTX({"a": {"b": nt}}))
+
+        def test_index(self):
+            # type: () -> None
+            t = TMPL(
+                """
+                this works: {{ a }}
+                this does not work: {{ a.11 }}
+                """
+            )
+            exc = (
+                "Token '11' of 'a.11' in template '<unknown source>' does not resolve.\n"
+                "Possibly you meant to use '1'.\n"
+                "You may silence this by adding 'a.11' to settings.SHOUTY_VARIABLE_BLACKLIST"
+            )
+            with self.assertRaisesMessage(self.MissingVariable, exc):
+                t.render(CTX({"a": (1, 2)}))
+
+        def test_nested_templates(self):
+            # type: () -> None
+            t = TMPL(
+                """
+                this works: {{ a }}
+                but this won't: {% include subtemplate %}
+                """
+            )
+            st = TMPL(
+                """
+                this works: {{ b }}
+                this won't work: {{ c }}
+                """
+            )
+            exc = (
+                "Variable 'c' in template '<unknown source>' does not resolve.\n"
+                "You may silence this by adding 'c' to settings.SHOUTY_VARIABLE_BLACKLIST"
+            )
+            with self.assertRaisesMessage(self.MissingVariable, exc):
+                t.render(CTX({"a": 1, "subtemplate": st, "b": 2}))
+
+        def test_form_possibilities(self):
+            # type: () -> None
+            t = TMPL(
+                """
+                {{ form.exampl }}
+                """
+            )
+
+            class MyForm(Form):  # type: ignore
+                example = IntegerField()
+
+            exc = (
+                "Token 'exampl' of 'form.exampl' in template '<unknown source>' does not resolve.\n"
+                "Possibly you meant to use 'example'.\n"
+                "You may silence this by adding 'form.exampl' to settings.SHOUTY_VARIABLE_BLACKLIST"
+            )
+            with self.assertRaisesMessage(self.MissingVariable, exc):
+                t.render(CTX({"form": MyForm(data={"example": "1"})}))
+
+        def test_model_possibilities(self):
+            # type: () -> None
+            t = TMPL(
+                """
+                {{ obj.object_i }}
+                """
+            )
+            from django.contrib.admin.models import LogEntry
+            from django.contrib.auth.models import User
+            from django.contrib.contenttypes.models import ContentType
+
+            user = User.objects.create()
+            example = LogEntry.objects.create(
+                user=user,
+                content_type=ContentType.objects.get_for_model(user),
+                object_id=str(user.pk),
+                object_repr=str(user),
+                action_flag=1,
+                change_message="",
+            )
+
+            exc = (
+                "Token 'object_i' of 'obj.object_i' in template '<unknown source>' does not resolve.\n"
+                "Possibly you meant one of: 'object_id', 'objects', 'object_repr'.\n"
+                "You may silence this by adding 'obj.object_i' to settings.SHOUTY_VARIABLE_BLACKLIST"
+            )
+            with self.assertRaisesMessage(self.MissingVariable, exc):
+                t.render(CTX({"obj": example}))
+
+        def test_model_related_possibilities(self):
+            # type: () -> None
+            t = TMPL(
+                """
+                {{ obj.logentry_se.all }}
+                """
+            )
+            from django.contrib.admin.models import LogEntry
+            from django.contrib.auth.models import User
+            from django.contrib.contenttypes.models import ContentType
+
+            user = User.objects.create()
+
+            exc = (
+                "Token 'logentry_se' of 'obj.logentry_se.all' in template '<unknown source>' does not resolve.\n"
+                "Possibly you meant to use 'logentry_set'.\n"
+                "You may silence this by adding 'obj.logentry_se.all' to settings.SHOUTY_VARIABLE_BLACKLIST"
+            )
+            with self.assertRaisesMessage(self.MissingVariable, exc):
+                t.render(CTX({"obj": user}))
+
+    class MyPyTestCase(TestCase):  # type: ignore
+        def test_for_types(self):
+            # type: () -> None
+            try:
+                from mypy import api as mypy
+                import os
+            except ImportError:
+                return
+            else:
+                here = os.path.abspath(__file__)
+                report, errors, exit_code = mypy.run(
+                    ["--strict", "--ignore-missing-imports", here]
+                )
+                if errors:
+                    self.fail(errors)
+                elif exit_code > 0:
+                    self.fail(report)
+
+    test_runner = DiscoverRunner(interactive=False, verbosity=2)
+
+    failures = test_runner.run_tests(
+        test_labels=(),
+        extra_tests=(
+            test_runner.test_loader.loadTestsFromTestCase(BasicUsageTestCase),
+            test_runner.test_loader.loadTestsFromTestCase(MyPyTestCase),
+        ),
+    )
