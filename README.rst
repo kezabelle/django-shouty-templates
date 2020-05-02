@@ -106,7 +106,7 @@ django-debug-toolbar work.
 Tests
 -----
 
-Literally none. Enjoy!
+Just run ``python3 -m shouty`` and hope for the best. I usually do.
 
 The license
 -----------
