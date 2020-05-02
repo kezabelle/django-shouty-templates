@@ -2,7 +2,7 @@ django-shouty-templates
 =======================
 
 :author: Keryn Knight
-:version: 0.1.4
+:version: 0.1.5
 
 
 Rationale

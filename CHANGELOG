@@ -1,7 +1,6 @@
 Change history for django-shouty-templates
 ------------------------------------------
-
-?next?
+0.1.5
 ^^^^^^
 * Feature: system check to validate any `SHOUTY_VARIABLE_BLACKLIST` in your settings.
 * Feature: Attempt to highlight the exception location in any subtemplate, better than Django currently does.
