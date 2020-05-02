@@ -3,9 +3,13 @@ Change history for django-shouty-templates
 
 ?next?
 ^^^^^^
+* Feature: system check to validate any `SHOUTY_VARIABLE_BLACKLIST` in your settings.
 * Feature: Attempt to highlight the exception location in any subtemplate, better than Django currently does.
 * Feature: Update exception message with any potential typo candidates.
-* Bugfix: patch methods hidden from the debug error page should now be consistently hidden always, rather than dependant on hitting the expected branch.
+* Feature: Silencing missing variables on a per-template basis.
+* Feature: Deep inspection of ``{% if ... %} {% elif ... %}``` nodes for any which are variables which don't exist.
+* Bugfix: Patch methods hidden from the debug error page should now be consistently hidden always, rather than dependant on hitting the expected branch.
+* Bugfix: Unit tests now exist to demonstrate how it should behave, at least on Django 2.2~
 
 0.1.4
 ^^^^^^

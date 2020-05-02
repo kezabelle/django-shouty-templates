@@ -46,20 +46,56 @@ Add ``shouty`` or ``shouty.Shout`` to your ``settings.INSTALLED_APPS``
 Optional configuration
 ^^^^^^^^^^^^^^^^^^^^^^
 
-- ``settings.SHOUTY_VARIABLES`` may be ``True|False`` and determines if the
-  exception is raised when trying to use a variable which doesn't exist.
-  Defaults to ``True``.
-- ``settings.SHOUTY_URLS`` may be ``True|False`` and determines if an
-  exception is raised when doing ``{% url 'myurl' as my_var %}`` and ``myurl``
-  doesn't actually resolve to a view.  Defaults to ``True``.
-- ``settings.SHOUTY_VARIABLE_BLACKLIST`` is a ``tuple`` of ``str`` where each one
-  represents a template usage to ignore. Useful for if you are trying to fix up
-  an existing project. eg: ``chef.can_add_cakes`` may be supressed if necessary.
-- ``settings.SHOUTY_URL_BLACKLIST`` is a ``tuple`` of ``2-tuple`` to prevent
-  certain URLs and their output variables from shouting at you loudly. Useful for
-  existing projects or third-party apps which are less strict.
-  eg: ``{% url "myurl" as my_var %}`` may be suppressed with ``('myurl', 'my_var')``
-  which would still let ``{% url "myurl as "my_other_var %}`` raise an exception.
+A list of values which may be set in your project's settings module:
+
+settings.SHOUTY_VARIABLES
++++++++++++++++++++++++++
+
+May be ``True|False`` and determines if the exception is raised when trying to
+use a variable which doesn't exist.
+
+Defaults to ``True``.
+
+
+settings.SHOUTY_URLS
+++++++++++++++++++++
+
+May be ``True|False`` and determines if an exception is raised when
+doing ``{% url 'myurl' as my_var %}`` and ``myurl`` doesn't actually resolve to a view.
+
+Defaults to ``True``.
+
+settings.SHOUTY_VARIABLE_BLACKLIST
+++++++++++++++++++++++++++++++++++
+
+Useful for if you are trying to fix up an existing project, or ignore problems
+in third-party templates.
+
+Expects a ``tuple`` of ``str`` where each one represents a template usage to ignore::
+
+    SHOUTY_VARIABLE_BLACKLIST = ("chef.can_add_cakes", "my_sometimes_set_variable")
+
+May also be a ``dict`` of ``str`` keys and a sequence (eg: ``tuple`` or ``list``) of templates in which to ignore it::
+
+    SHOUTY_VARIABLE_BLACKLIST = {
+        "chef.can_add_cakes": ("*",),
+        "my_sometimes_set_variable": ["admin/custom_view.html", "admin/custom_view_detail.html"],
+        "random_in_memory_template": ["<unknown source>"],
+    }
+
+settings.SHOUTY_URL_BLACKLIST
++++++++++++++++++++++++++++++
+
+A ``tuple`` of ``2-tuple`` to prevent certain URLs and their output variables f
+rom shouting at you loudly. Useful forexisting projects or third-party apps which are less strict.
+
+By way of example, ``{% url "myurl" as my_var %}`` may be suppressed with::
+
+    SHOUTY_URL_BLACKLIST = (
+        ('myurl', 'my_var'),
+    )
+
+which would still let ``{% url "myurl as "my_other_var %}`` raise an exception.
 
 Default configuration
 ^^^^^^^^^^^^^^^^^^^^^
