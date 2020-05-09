@@ -134,6 +134,8 @@ VARIABLE_BLACKLIST = {
     # DEBUG=True and the user's IP is in INTERNAL_IPS
     "debug": ("*",),
     "sql_queries": ("*",),
+    "site_title": ("admin_honeypot/login.html",),
+    "site_header": ("admin_honeypot/login.html",),
 }  # type: Dict[str, Tuple[Text,...]]
 
 IF_VARIABLE_BLACKLIST = {
@@ -633,21 +635,35 @@ default_app_config = "shouty.Shout"
 
 
 if __name__ == "__main__":
+    from unittest import skipIf
     from django.test import TestCase, override_settings
     from django.test.runner import DiscoverRunner
     import django
     from django.conf import settings as test_settings
     from django.utils.functional import SimpleLazyObject
 
+    EXTRA_INSTALLED_APPS = ()  # type: Tuple[Text, ...]
+    try:
+        import admin_honeypot
+
+        EXTRA_INSTALLED_APPS += ("admin_honeypot",)
+    except ImportError:
+        pass
+
     def urlpatterns():
         # type: () -> Tuple[Any, ...]
         from django.urls import path, include
         from django.contrib import admin
 
-        return (
+        patterns = ()  # type: Tuple[Any, ...]
+        if "admin_honeypot" in EXTRA_INSTALLED_APPS:
+            patterns += (path("admin_honeypot/", include("admin_honeypot.urls")),)
+
+        patterns += (
             path("admin/doc/", include("django.contrib.admindocs.urls")),
             path("admin/", admin.site.urls),
         )
+        return patterns
 
     test_settings.configure(
         DATABASES={
@@ -661,7 +677,8 @@ if __name__ == "__main__":
             "django.contrib.sessions",
             "django.contrib.messages",
             "shouty",
-        ),
+        )
+        + EXTRA_INSTALLED_APPS,
         MIDDLEWARE=(
             "django.contrib.sessions.middleware.SessionMiddleware",
             "django.contrib.auth.middleware.AuthenticationMiddleware",
@@ -1170,6 +1187,16 @@ if __name__ == "__main__":
                 with self.subTest(url=url):
                     response = self.client.get(url, follow=False)
                     self.assertStatusCode(response, 200)
+
+        @skipIf(
+            "admin_honeypot" not in EXTRA_INSTALLED_APPS,
+            "django-admin-honeypot is not installed",
+        )
+        def test_admin_honeypot_should_render_ok(self):
+            # type: () -> None
+            """ Versions <= 1.1.0 don't set 'site_title' or 'site_header' variables """
+            response = self.client.get("/admin_honeypot/login/", follow=False)
+            self.assertStatusCode(response, 200)
 
         def test_example_404(self):
             # type: () -> None
