@@ -318,7 +318,7 @@ def new_resolve_lookup(self, context):
                 # just carry on and let Django try for itself to set up relevant
                 # debug info
                 template_name = UNKNOWN_SOURCE
-                exc_info = None
+                exc_info = {}
                 all_template_names = [UNKNOWN_SOURCE]
             bit = e.params[0]  # type: Text
             current = e.params[1]
@@ -500,7 +500,7 @@ def new_url_render(self, context):
                 # just carry on and let Django try for itself to set up relevant
                 # debug info
                 template_name = UNKNOWN_SOURCE
-                exc_info = None
+                exc_info = {}
             msg = "{{% url {token!s} ... as {asvar!s} %}} in template '{template} did not resolve.\nYou may silence this globally by adding {key!r} to settings.SHOUTY_URL_BLACKLIST".format(
                 token=self.view_name, asvar=outvar, key=key, template=template_name,
             )
