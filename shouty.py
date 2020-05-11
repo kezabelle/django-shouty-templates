@@ -22,6 +22,16 @@ from django.template.base import (
     UNKNOWN_SOURCE,
     Template,
     Origin,
+    VARIABLE_TAG_START,
+    VARIABLE_TAG_END,
+    BLOCK_TAG_START,
+    BLOCK_TAG_END,
+    COMMENT_TAG_START,
+    COMMENT_TAG_END,
+    VARIABLE_ATTRIBUTE_SEPARATOR,
+    FILTER_SEPARATOR,
+    FILTER_ARGUMENT_SEPARATOR,
+    tag_re,
 )
 from django.template.context import BaseContext
 from django.template.defaulttags import URLNode, IfNode, TemplateLiteral
@@ -274,6 +284,7 @@ def create_exception_with_template_debug(context, part, exception_cls):
     assert len(contexts_to_search) <= len(all_potential_contexts)
 
     template_names = []  # type: List[Text]
+
     for parent in contexts_to_search:
         if isinstance(parent, Origin):
             _template, _origin = context.template.engine.find_template(
@@ -287,32 +298,50 @@ def create_exception_with_template_debug(context, part, exception_cls):
             template_names.append(UNKNOWN_SOURCE)
         else:
             template_names.append(_origin.template_name)
-        # Because Django doesn't allow multi-line stuff, we know if we don't
-        # see one of those we're probably in a block comment? And if we see
-        # #} on this line we're probably in a line comment?
+
         src = _template.source  # type: Text
-        lines = src.splitlines()  # type: List[Text]
-        for line in lines:
-            if part not in line:
-                continue
-            if "}}" not in line and "%}" not in line:
+
+        # We don't want {{ username }} to be highlighted for an error related to {{ name }}
+        # so we check the previous/next character from the token's match
+        preceeded_by = (
+            VARIABLE_ATTRIBUTE_SEPARATOR,
+            FILTER_SEPARATOR,
+            FILTER_ARGUMENT_SEPARATOR,
+            " ",
+            "{",
+        )
+        proceeded_by = (
+            VARIABLE_ATTRIBUTE_SEPARATOR,
+            FILTER_SEPARATOR,
+            FILTER_ARGUMENT_SEPARATOR,
+            " ",
+            "=",
+            "}",
+        )
+
+        for match in tag_re.finditer(src):
+            match_start, match_end = match.span()
+            token = src[match_start:match_end]
+            if part not in token:
                 continue
 
-            # Line comment wrapping over it.
-            active_line_start = line.find(part)  # type: int
             # We need to make sure that the {# and #} appear to the left & right of our part
-            if (
-                "{#" in line
-                and "#}" in line
-                and line.find("{#") < active_line_start
-                and line.find("#}") > active_line_start
-            ):
+            if VARIABLE_TAG_END not in token and BLOCK_TAG_END not in token:
+                continue
+            elif token[0:2] == COMMENT_TAG_START and token[-2:] == COMMENT_TAG_END:
                 continue
 
-            line_start = src.find(line)  # type: int
-            start = src.find(part, line_start)  # type: int
+            # Where does the line/token start in the original, newlines ridden source?
+            first_occurance_of_token = src.find(token, match_start - 1)  # type: int
+            start = src.find(part, first_occurance_of_token)
+
             if start > -1:
                 end = start + len(part)
+                if src[start - 1] not in preceeded_by:
+                    continue
+                elif src[end] not in proceeded_by:
+                    continue
+
                 exc_info = _template.get_exception_info(
                     exception_cls("ignored"), faketoken(position=(start, end))
                 )  # type: Dict[Text, Any]
