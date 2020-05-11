@@ -161,6 +161,46 @@ IF_VARIABLE_BLACKLIST = {
     # accessing admindocs views detail will have these in file admin_doc/view_detail.html
     "meta.Context": ("admin_doc/view_detail.html",),
     "meta.Templates": ("admin_doc/view_detail.html",),
+    # Rest framework...
+    "name": ("rest_framework/base.html",),
+    "code_style": ("rest_framework/base.html",),
+    "style.hide_label": (
+        "rest_framework/horizontal/checkbox.html",
+        "rest_framework/horizontal/checkbox_multiple.html",
+        "rest_framework/horizontal/dict_field.html",
+        "rest_framework/horizontal/fieldset.html",
+        "rest_framework/horizontal/input.html",
+        "rest_framework/horizontal/list_field.html",
+        "rest_framework/horizontal/list_fieldset.html",
+        "rest_framework/horizontal/radio.html",
+        "rest_framework/horizontal/select.html",
+        "rest_framework/horizontal/select_multiple.html",
+        "rest_framework/horizontal/textarea.html",
+        "rest_framework/vertical/checkbox.html",
+        "rest_framework/vertical/checkbox_multiple.html",
+        "rest_framework/vertical/dict_field.html",
+        "rest_framework/vertical/fieldset.html",
+        "rest_framework/vertical/input.html",
+        "rest_framework/vertical/list_field.html",
+        "rest_framework/vertical/list_fieldset.html",
+        "rest_framework/vertical/radio.html",
+        "rest_framework/vertical/select.html",
+        "rest_framework/vertical/select_multiple.html",
+        "rest_framework/vertical/textarea.html",
+    ),
+    "style.placeholder": (
+        "rest_framework/horizontal/input.html",
+        "rest_framework/horizontal/textarea.html",
+        "rest_framework/inline/input.html",
+        "rest_framework/inline/textarea.html",
+        "rest_framework/vertical/input.html",
+        "rest_framework/vertical/textarea.html",
+    ),
+    "style.autofocus": (
+        "rest_framework/horizontal/input.html",
+        "rest_framework/inline/input.html",
+        "rest_framework/vertical/input.html",
+    ),
 }  # type: Dict[str, Tuple[Text,...]]
 
 
