@@ -440,7 +440,7 @@ def new_resolve_lookup(self, context):
                 token=bit,
                 var=whole_var,
                 template=template_name,
-                closest_matches="', '".join(closest),
+                closest_matches="', '".join(closest),  # type: ignore
                 templates="', '".join(all_template_names),
             )
             exc = MissingVariable(msg)
@@ -705,7 +705,8 @@ default_app_config = "shouty.Shout"
 
 if __name__ == "__main__":
     from unittest import skipIf
-    from django.test import TestCase, override_settings
+    from contextlib import contextmanager
+    from django.test import TestCase, SimpleTestCase, override_settings
     from django.test.runner import DiscoverRunner
     import django
     from django.conf import settings as test_settings
@@ -771,10 +772,57 @@ if __name__ == "__main__":
         SHOUTY_URLS=True,
     )
     django.setup()
-    from django.template import Template as TMPL, Context as CTX
+    from django.template import Template, Context as CTX
     from django.forms import IntegerField
 
-    class BasicUsageTestCase(TestCase):  # type: ignore
+    class TMPL(Template):  # type: ignore
+        def __init__(self, *args, **kwargs):
+            # type: (Any, Any) -> None
+            super(TMPL, self).__init__(*args, **kwargs)
+            self.engine.debug = True
+
+    class CustomAssertions(object):
+        @contextmanager
+        def assertRaisesWithTemplateDebug(
+            self, exception_type, exception_repr, debug_data
+        ):
+            # type: (Type[Exception], Text, Dict[str, Any]) -> Iterator[None]
+            try:
+                yield
+            except exception_type as exc:
+                self.assertIn(str(exception_repr), str(exc))  # type: ignore
+                if not hasattr(exc, "template_debug") or exc.template_debug == {}:  # type: ignore
+                    self.fail("Missing template_debug attribute from {}".format(exc))  # type: ignore
+                template_debug = exc.template_debug  # type: ignore
+                if not debug_data:
+                    self.fail(  # type: ignore
+                        "No data provided to check against {}".format(template_debug)
+                    )
+
+                expected = {}
+                found = {}
+                for expected_key, expected_value in debug_data.items():
+                    self.assertIn(expected_key, set(template_debug.keys()))  # type: ignore
+                    found_value = template_debug[expected_key]
+                    if expected_value != found_value:
+                        expected[expected_key] = expected_value
+                        found[expected_key] = found_value
+
+                other_keys = {}
+                for k, v in template_debug.items():
+                    if k not in found and k not in expected:
+                        if isinstance(v, str) and len(v) > 10:
+                            v = "{}...".format(v[0:10])
+                        other_keys[k] = v
+
+                if expected and found:
+                    self.fail(  # type: ignore
+                        "Found template_debug data {found!r} instead of {expected!r}\nOther possible keys include: {others!r}".format(
+                            found=found, expected=expected, others=other_keys,
+                        )
+                    )
+
+    class BasicUsageTestCase(CustomAssertions, TestCase):  # type: ignore
         def setUp(self):
             # type: () -> None
             from shouty import MissingVariable
@@ -789,12 +837,13 @@ if __name__ == "__main__":
                 this does not work: {{ b }}
                 """
             )
-            exc = (
+            with self.assertRaisesWithTemplateDebug(
+                self.MissingVariable,
                 "Variable 'b' in template '<unknown source>' does not resolve.\n"
                 "Possibly you meant to use 'be'.\n"
-                "You may silence this globally by adding 'b' to the settings.SHOUTY_VARIABLE_BLACKLIST iterable."
-            )
-            with self.assertRaisesMessage(self.MissingVariable, exc):
+                "You may silence this globally by adding 'b' to the settings.SHOUTY_VARIABLE_BLACKLIST iterable.",
+                {"line": 3, "start": 76, "end": 77, "during": "b"},
+            ):
                 t.render(CTX({"a": 1, "be": 2}))
 
         def test_silencing(self):
@@ -846,12 +895,14 @@ if __name__ == "__main__":
                 this does not work: {{ a.b.c }}
                 """
             )
-            exc = (
+            exc = ()
+            with self.assertRaisesWithTemplateDebug(
+                self.MissingVariable,
                 "Token 'c' of 'a.b.c' in template '<unknown source>' does not resolve.\n"
                 "Possibly you meant to use 'cd'.\n"
-                "You may silence this globally by adding 'a.b.c' to the settings.SHOUTY_VARIABLE_BLACKLIST iterable."
-            )
-            with self.assertRaisesMessage(self.MissingVariable, exc):
+                "You may silence this globally by adding 'a.b.c' to the settings.SHOUTY_VARIABLE_BLACKLIST iterable.",
+                {"line": 4, "start": 114, "end": 119, "during": "a.b.c"},
+            ):
                 t.render(CTX({"a": {"b": {"cd": 1}}}))
 
         def test_nested_tokens_on_namedtuple(self):
@@ -860,16 +911,17 @@ if __name__ == "__main__":
                 """
                 this works: {{ a }}
                 this works: {{ a.b }}
-                this does not work: {{ a.b.c }}
+                this does not work: ... {{ a.b.c }}
                 """
             )
             nt = namedtuple("nt", "cd ce cf cg")(cd=1, ce=2, cf=3, cg=4)  # type: ignore
-            exc = (
+            with self.assertRaisesWithTemplateDebug(
+                self.MissingVariable,
                 "Token 'c' of 'a.b.c' in template '<unknown source>' does not resolve.\n"
                 "Possibly you meant one of: 'cg', 'cf', 'ce'.\n"
-                "You may silence this globally by adding 'a.b.c' to the settings.SHOUTY_VARIABLE_BLACKLIST iterable."
-            )
-            with self.assertRaisesMessage(self.MissingVariable, exc):
+                "You may silence this globally by adding 'a.b.c' to the settings.SHOUTY_VARIABLE_BLACKLIST iterable.",
+                {"line": 4, "start": 118, "end": 123, "during": "a.b.c"},
+            ):
                 t.render(CTX({"a": {"b": nt}}))
 
         def test_index(self):
@@ -880,12 +932,13 @@ if __name__ == "__main__":
                 this does not work: {{ a.11 }}
                 """
             )
-            exc = (
+            with self.assertRaisesWithTemplateDebug(
+                self.MissingVariable,
                 "Token '11' of 'a.11' in template '<unknown source>' does not resolve.\n"
                 "Possibly you meant to use '1'.\n"
-                "You may silence this globally by adding 'a.11' to the settings.SHOUTY_VARIABLE_BLACKLIST iterable."
-            )
-            with self.assertRaisesMessage(self.MissingVariable, exc):
+                "You may silence this globally by adding 'a.11' to the settings.SHOUTY_VARIABLE_BLACKLIST iterable.",
+                {"line": 3, "start": 76, "end": 80, "during": "a.11"},
+            ):
                 t.render(CTX({"a": (1, 2)}))
 
         def test_nested_templates(self):
@@ -902,11 +955,12 @@ if __name__ == "__main__":
                 this won't work: {{ c }}
                 """
             )
-            exc = (
+            with self.assertRaisesWithTemplateDebug(
+                self.MissingVariable,
                 "Variable 'c' in template '<unknown source>' does not resolve.\n"
-                "You may silence this globally by adding 'c' to the settings.SHOUTY_VARIABLE_BLACKLIST iterable."
-            )
-            with self.assertRaisesMessage(self.MissingVariable, exc):
+                "You may silence this globally by adding 'c' to the settings.SHOUTY_VARIABLE_BLACKLIST iterable.",
+                {"start": 73, "end": 74, "during": "c"},
+            ):
                 t.render(CTX({"a": 1, "subtemplate": st, "b": 2}))
 
         def test_form_possibilities(self):
@@ -920,12 +974,13 @@ if __name__ == "__main__":
             class MyForm(Form):  # type: ignore
                 example = IntegerField()
 
-            exc = (
+            with self.assertRaisesWithTemplateDebug(
+                self.MissingVariable,
                 "Token 'exampl' of 'form.exampl' in template '<unknown source>' does not resolve.\n"
                 "Possibly you meant to use 'example'.\n"
-                "You may silence this globally by adding 'form.exampl' to the settings.SHOUTY_VARIABLE_BLACKLIST iterable."
-            )
-            with self.assertRaisesMessage(self.MissingVariable, exc):
+                "You may silence this globally by adding 'form.exampl' to the settings.SHOUTY_VARIABLE_BLACKLIST iterable.",
+                {"start": 20, "end": 31, "during": "form.exampl"},
+            ):
                 t.render(CTX({"form": MyForm(data={"example": "1"})}))
 
         def test_model_possibilities(self):
@@ -948,13 +1003,13 @@ if __name__ == "__main__":
                 action_flag=1,
                 change_message="",
             )
-
-            exc = (
+            with self.assertRaisesWithTemplateDebug(
+                self.MissingVariable,
                 "Token 'object_i' of 'obj.object_i' in template '<unknown source>' does not resolve.\n"
                 "Possibly you meant one of: 'object_id', 'objects', 'object_repr'.\n"
-                "You may silence this globally by adding 'obj.object_i' to the settings.SHOUTY_VARIABLE_BLACKLIST iterable."
-            )
-            with self.assertRaisesMessage(self.MissingVariable, exc):
+                "You may silence this globally by adding 'obj.object_i' to the settings.SHOUTY_VARIABLE_BLACKLIST iterable.",
+                {"start": 20, "end": 32, "during": "obj.object_i"},
+            ):
                 t.render(CTX({"obj": example}))
 
         def test_model_related_possibilities(self):
@@ -969,13 +1024,13 @@ if __name__ == "__main__":
             from django.contrib.contenttypes.models import ContentType
 
             user = User.objects.create()
-
-            exc = (
+            with self.assertRaisesWithTemplateDebug(
+                self.MissingVariable,
                 "Token 'logentry_se' of 'obj.logentry_se.all' in template '<unknown source>' does not resolve.\n"
                 "Possibly you meant to use 'logentry_set'.\n"
-                "You may silence this globally by adding 'obj.logentry_se.all' to the settings.SHOUTY_VARIABLE_BLACKLIST iterable."
-            )
-            with self.assertRaisesMessage(self.MissingVariable, exc):
+                "You may silence this globally by adding 'obj.logentry_se.all' to the settings.SHOUTY_VARIABLE_BLACKLIST iterable.",
+                {"start": 20, "end": 39, "during": "obj.logentry_se.all"},
+            ):
                 t.render(CTX({"obj": user}))
 
         def test_for_loop(self):
@@ -996,12 +1051,13 @@ if __name__ == "__main__":
                 can_add_cakes = (1, 2, 3)
                 can_add_pastries = (1, 2, 3)
 
-            exc = (
+            with self.assertRaisesWithTemplateDebug(
+                self.MissingVariable,
                 "Token 'can_add_pastry' of 'chef.can_add_pastry' in template '<unknown source>' does not resolve.\n"
                 "Possibly you meant one of: 'can_add_pastries', 'can_add_cakes'.\n"
-                "You may silence this globally by adding 'chef.can_add_pastry' to the settings.SHOUTY_VARIABLE_BLACKLIST iterable."
-            )
-            with self.assertRaisesMessage(self.MissingVariable, exc):
+                "You may silence this globally by adding 'chef.can_add_pastry' to the settings.SHOUTY_VARIABLE_BLACKLIST iterable.",
+                {"start": 149, "end": 168, "during": "chef.can_add_pastry"},
+            ):
                 t.render(CTX({"chef": Chef()}))
 
         def test_multiple_variables_in_if_stmt_and_only_some_resolve(self):
@@ -1018,12 +1074,13 @@ if __name__ == "__main__":
                 can_add_cakes = (1, 2, 3)
                 can_add_pastries = (1, 2, 3)
 
-            exc = (
+            with self.assertRaisesWithTemplateDebug(
+                self.MissingVariable,
                 "Token 'can_add_pastry' of 'chef.can_add_pastry' in template '<unknown source>' does not resolve.\n"
                 "Possibly you meant one of: 'can_add_pastries', 'can_add_cakes'.\n"
-                "You may silence this globally by adding 'chef.can_add_pastry' to the settings.SHOUTY_VARIABLE_BLACKLIST iterable."
-            )
-            with self.assertRaisesMessage(self.MissingVariable, exc):
+                "You may silence this globally by adding 'chef.can_add_pastry' to the settings.SHOUTY_VARIABLE_BLACKLIST iterable.",
+                {"start": 46, "end": 65, "during": "chef.can_add_pastry"},
+            ):
                 t.render(CTX({"chef": Chef()}))
 
         def test_many_if_variables1(self):
@@ -1035,11 +1092,12 @@ if __name__ == "__main__":
                 {% endif %}
                 """
             )
-            exc = (
+            with self.assertRaisesWithTemplateDebug(
+                self.MissingVariable,
                 "Variable 'wheee' in template '<unknown source>' does not resolve.\n"
-                "You may silence this globally by adding 'wheee' to the settings.SHOUTY_VARIABLE_BLACKLIST iterable."
-            )
-            with self.assertRaisesMessage(self.MissingVariable, exc):
+                "You may silence this globally by adding 'wheee' to the settings.SHOUTY_VARIABLE_BLACKLIST iterable.",
+                {"start": 59, "end": 64, "during": "wheee"},
+            ):
                 t.render(CTX({"whooo": 0}))
 
         def test_many_if_variables2(self):
@@ -1051,11 +1109,12 @@ if __name__ == "__main__":
                 {% endif %}
                 """
             )
-            exc = (
+            with self.assertRaisesWithTemplateDebug(
+                self.MissingVariable,
                 "Variable 'whooo' in template '<unknown source>' does not resolve.\n"
-                "You may silence this globally by adding 'whooo' to the settings.SHOUTY_VARIABLE_BLACKLIST iterable."
-            )
-            with self.assertRaisesMessage(self.MissingVariable, exc):
+                "You may silence this globally by adding 'whooo' to the settings.SHOUTY_VARIABLE_BLACKLIST iterable.",
+                {"start": 33, "end": 38, "during": "whooo"},
+            ):
                 t.render(CTX({}))
 
         def test_if_elif(self):
@@ -1071,11 +1130,12 @@ if __name__ == "__main__":
                 {% endif %}
                 """
             )
-            exc = (
+            with self.assertRaisesWithTemplateDebug(
+                self.MissingVariable,
                 "Variable 'x' in template '<unknown source>' does not resolve.\n"
-                "You may silence this globally by adding 'x' to the settings.SHOUTY_VARIABLE_BLACKLIST iterable."
-            )
-            with self.assertRaisesMessage(self.MissingVariable, exc):
+                "You may silence this globally by adding 'x' to the settings.SHOUTY_VARIABLE_BLACKLIST iterable.",
+                {"start": 133, "end": 134, "during": "x"},
+            ):
                 t.render(CTX({}))
 
         def test_exception_debug_info(self):
@@ -1089,7 +1149,6 @@ if __name__ == "__main__":
                 {% endif %}
                 """
             )
-            t.engine.debug = True
             try:
                 t.render(CTX({"x": 1, "y": 1, "def": 2}))
             except self.MissingVariable as exc:
@@ -1097,7 +1156,33 @@ if __name__ == "__main__":
                 self.assertEqual(exc.template_debug["name"], UNKNOWN_SOURCE)
                 self.assertEqual(exc.template_debug["during"], "abc")
 
-    class UrlTestCase(TestCase):  # type: ignore
+        def test_complex_exception_debug_info(self):
+            # type: () -> None
+            t = TMPL(
+                """
+                {# <title>{{ wheee }}</title> #}
+                but this won't: {% include subtemplate with x=1 only %}
+                {{ wheee }} 
+                """
+            )
+            t.origin.template_name = "parent"
+            st = TMPL(
+                """
+                {% if 0 %} {{ userwheee }}
+                {% endif %}
+                """
+            )
+            st.origin.template_name = "child"
+
+            with self.assertRaisesWithTemplateDebug(
+                self.MissingVariable,
+                "Variable 'wheee' in template 'parent' does not resolve.\n"
+                "You may silence this globally by adding 'wheee' to the settings.SHOUTY_VARIABLE_BLACKLIST iterable.",
+                {"start": 141, "end": 146, "during": "wheee"},
+            ):
+                t.render(CTX({"subtemplate": st}))
+
+    class UrlTestCase(CustomAssertions, SimpleTestCase):  # type: ignore
         def setUp(self):
             # type: () -> None
             from shouty import MissingVariable
@@ -1111,14 +1196,15 @@ if __name__ == "__main__":
                 {% url "waffle" as wheee %}
                 """
             )
-            exc = (
+            with self.assertRaisesWithTemplateDebug(
+                self.MissingVariable,
                 '{% url "waffle" ... as wheee %} in template \'<unknown source> did not resolve.\n'
-                "You may silence this globally by adding ('waffle', 'wheee') to settings.SHOUTY_URL_BLACKLIST"
-            )
-            with self.assertRaisesMessage(self.MissingVariable, exc):
+                "You may silence this globally by adding ('waffle', 'wheee') to settings.SHOUTY_URL_BLACKLIST",
+                {"start": 36, "end": 41, "during": "wheee"},
+            ):
                 t.render(CTX())
 
-    class ReadmeExampleTestCase(TestCase):  # type: ignore
+    class ReadmeExampleTestCase(CustomAssertions, SimpleTestCase):  # type: ignore
         def setUp(self):
             # type: () -> None
             from shouty import MissingVariable
@@ -1139,12 +1225,13 @@ if __name__ == "__main__":
                 is_cake_chef = True
                 can_add_cakes = True
 
-            exc = (
+            with self.assertRaisesWithTemplateDebug(
+                self.MissingVariable,
                 "Token 'chef' of 'chef.can_add_cakes' in template '<unknown source>' does not resolve.\n"
                 "Possibly you meant to use 'sous_chef'.\n"
-                "You may silence this globally by adding 'chef.can_add_cakes' to the settings.SHOUTY_VARIABLE_BLACKLIST iterable."
-            )
-            with self.assertRaisesMessage(self.MissingVariable, exc):
+                "You may silence this globally by adding 'chef.can_add_cakes' to the settings.SHOUTY_VARIABLE_BLACKLIST iterable.",
+                {"start": 23, "during": "chef.can_add_cakes", "end": 41},
+            ):
                 t.render(CTX({"sous_chef": Chef()}))
 
         def test_is_cake_chef_renamed_to_is_pastry_king(self):
@@ -1161,11 +1248,12 @@ if __name__ == "__main__":
                 is_pastry_king = 1
                 can_add_cakes = 1
 
-            exc = (
+            with self.assertRaisesWithTemplateDebug(
+                self.MissingVariable,
                 "Token 'is_cake_chef' of 'chef.is_cake_chef' in template '<unknown source>' does not resolve.\n"
-                "You may silence this globally by adding 'chef.is_cake_chef' to the settings.SHOUTY_VARIABLE_BLACKLIST iterable."
-            )
-            with self.assertRaisesMessage(self.MissingVariable, exc):
+                "You may silence this globally by adding 'chef.is_cake_chef' to the settings.SHOUTY_VARIABLE_BLACKLIST iterable.",
+                {"start": 94, "during": "chef.is_cake_chef", "end": 111},
+            ):
                 t.render(CTX({"chef": Chef()}))
 
         def test_can_add_cakes_renamed_to_can_add_pastries(self):
@@ -1185,12 +1273,13 @@ if __name__ == "__main__":
                     # type: () -> bool
                     return True
 
-            exc = (
+            with self.assertRaisesWithTemplateDebug(
+                self.MissingVariable,
                 "Token 'can_add_cakes' of 'chef.can_add_cakes' in template '<unknown source>' does not resolve.\n"
                 "Possibly you meant to use 'can_add_pastries'.\n"
-                "You may silence this globally by adding 'chef.can_add_cakes' to the settings.SHOUTY_VARIABLE_BLACKLIST iterable."
-            )
-            with self.assertRaisesMessage(self.MissingVariable, exc):
+                "You may silence this globally by adding 'chef.can_add_cakes' to the settings.SHOUTY_VARIABLE_BLACKLIST iterable.",
+                {"start": 23, "during": "chef.can_add_cakes", "end": 41},
+            ):
                 t.render(CTX({"chef": Chef()}))
 
     class CommonAppsTestCase(TestCase):  # type: ignore
@@ -1277,7 +1366,7 @@ if __name__ == "__main__":
                 response = self.client.get("/favicon.ico", follow=False)
                 self.assertStatusCode(response, 404)
 
-    class InternalVariableBlacklistTestCase(TestCase):  # type: ignore
+    class InternalVariableBlacklistTestCase(SimpleTestCase):  # type: ignore
         def test_im_not_an_idiot(self):
             # type: () -> None
             for k, v in VARIABLE_BLACKLIST.items():
@@ -1307,7 +1396,7 @@ if __name__ == "__main__":
                         )
                     )
 
-    class MyPyTestCase(TestCase):  # type: ignore
+    class MyPyTestCase(SimpleTestCase):  # type: ignore
         def test_for_types(self):
             # type: () -> None
             try:
