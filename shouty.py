@@ -146,6 +146,8 @@ VARIABLE_BLACKLIST = {
     "sql_queries": ("*",),
     "site_title": ("admin_honeypot/login.html",),
     "site_header": ("admin_honeypot/login.html",),
+    # Django pipeline templates.
+    "media": ("pipeline/css.html",),
 }  # type: Dict[str, Tuple[Text,...]]
 
 IF_VARIABLE_BLACKLIST = {
@@ -162,6 +164,7 @@ IF_VARIABLE_BLACKLIST = {
         "admin_doc/model_detail.html",
         "admin_doc/view_detail.html",
         "admin_doc/bookmarklets.html",
+        "pipeline/css.html",
     ),
     # accessing admindocs detailed model information has: {% if field.help_text %} - ...
     # in file admin_doc/model_detail.html
@@ -211,6 +214,10 @@ IF_VARIABLE_BLACKLIST = {
         "rest_framework/inline/input.html",
         "rest_framework/vertical/input.html",
     ),
+    # Django pipeline templates.
+    "charset": ("pipeline/css.html",),
+    "async": ("pipeline/js.html",),
+    "defer": ("pipeline/js.html",),
 }  # type: Dict[str, Tuple[Text,...]]
 
 

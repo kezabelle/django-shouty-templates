@@ -4,7 +4,8 @@ Change history for django-shouty-templates
 ?next?
 ^^^^^^
 * Feature: Ignore variables which prevented much of REST Framework's browsable API from working.
-* Feature: Ignore variables which would cause the django-admin-honeypot package's fake login screen to error.
+* Feature: Ignore variables which would cause the ``django-admin-honeypot`` package's fake login screen to error.
+* Feature: Ignore variables which might cause ``django-pipeline`` rendering of ``<link>`` and ``<script>`` to error.
 * Bugfix: Improve per-template silencing via ``SHOUTY_VARIABLE_BLACKLIST``
 * Bugfix: Attempt to have fewer false positives when highlighting the location in the template of the exception.
 
