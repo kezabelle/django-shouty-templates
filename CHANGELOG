@@ -1,7 +1,6 @@
 Change history for django-shouty-templates
 ------------------------------------------
-
-?next?
+0.1.6
 ^^^^^^
 * Feature: Ignore variables which prevented much of REST Framework's browsable API from working.
 * Feature: Ignore variables which would cause the ``django-admin-honeypot`` package's fake login screen to error.

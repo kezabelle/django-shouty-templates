@@ -55,10 +55,10 @@ except ImportError:
     pass
 
 
-__version_info__ = "0.1.5"
-__version__ = "0.1.5"
-version = "0.1.5"
-VERSION = "0.1.5"
+__version_info__ = "0.1.6"
+__version__ = "0.1.6"
+version = "0.1.6"
+VERSION = "0.1.6"
 
 
 def get_version():
