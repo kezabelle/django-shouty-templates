@@ -41,7 +41,11 @@ errors because you forgot something!
 Setup
 -----
 
-Add ``shouty`` or ``shouty.Shout`` to your ``settings.INSTALLED_APPS``
+This package is available on `PyPI`_ and can be installed using pip or whatever like so::
+
+    pip install django-shouty-templates==0.1.6
+
+Then add ``shouty.Shout`` or ``shouty`` to your ``settings.INSTALLED_APPS``
 
 Optional configuration
 ^^^^^^^^^^^^^^^^^^^^^^
@@ -114,3 +118,4 @@ The license
 It's `FreeBSD`_. There's should be a ``LICENSE`` file in the root of the repository, and in any archives.
 
 .. _FreeBSD: http://en.wikipedia.org/wiki/BSD_licenses#2-clause_license_.28.22Simplified_BSD_License.22_or_.22FreeBSD_License.22.29
+.. _PyPI: https://pypi.org/
