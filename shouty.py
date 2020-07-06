@@ -289,6 +289,10 @@ def create_exception_with_template_debug(context, part, exception_cls):
     for k in render_context_flat:
         if isinstance(render_context_flat[k], Template):
             all_potential_contexts.append(render_context_flat[k])
+    context_flat = context.flatten()
+    for k in context_flat:
+        if isinstance(context_flat[k], Template):
+            all_potential_contexts.append(context_flat[k])
 
     for ctx in all_potential_contexts:
         if ctx not in contexts_to_search:
@@ -729,25 +733,45 @@ if __name__ == "__main__":
     try:
         import admin_honeypot
 
-        EXTRA_INSTALLED_APPS += ("admin_honeypot",)
+        if django.VERSION[0:2] > (1, 9):
+            EXTRA_INSTALLED_APPS += ("admin_honeypot",)
     except ImportError:
         pass
 
     def urlpatterns():
         # type: () -> Tuple[Any, ...]
-        from django.urls import path, include
+        try:
+            from django.urls import re_path, include
+        except ImportError:
+            from django.conf.urls import url as re_path, include
         from django.contrib import admin
 
         patterns = ()  # type: Tuple[Any, ...]
         if "admin_honeypot" in EXTRA_INSTALLED_APPS:
-            patterns += (path("admin_honeypot/", include("admin_honeypot.urls")),)
+            patterns += (re_path(r"^admin_honeypot/", include("admin_honeypot.urls")),)
 
         patterns += (
-            path("admin/doc/", include("django.contrib.admindocs.urls")),
-            path("admin/", admin.site.urls),
+            re_path(r"^admin/doc/", include("django.contrib.admindocs.urls")),
+            re_path(r"^admin/", admin.site.urls),
         )
         return patterns
 
+    if django.VERSION[0:2] <= (1, 9):
+        version_specific_settings = {
+            'MIDDLEWARE_CLASSES': [
+                "django.contrib.sessions.middleware.SessionMiddleware",
+                "django.contrib.auth.middleware.AuthenticationMiddleware",
+                "django.contrib.messages.middleware.MessageMiddleware",
+            ]
+        }
+    else:
+        version_specific_settings = {
+            'MIDDLEWARE': [
+                "django.contrib.sessions.middleware.SessionMiddleware",
+                "django.contrib.auth.middleware.AuthenticationMiddleware",
+                "django.contrib.messages.middleware.MessageMiddleware",
+            ]
+        }
     test_settings.configure(
         DATABASES={
             "default": {"ENGINE": "django.db.backends.sqlite3", "NAME": ":memory:"}
@@ -762,11 +786,6 @@ if __name__ == "__main__":
             "shouty",
         )
         + EXTRA_INSTALLED_APPS,
-        MIDDLEWARE=(
-            "django.contrib.sessions.middleware.SessionMiddleware",
-            "django.contrib.auth.middleware.AuthenticationMiddleware",
-            "django.contrib.messages.middleware.MessageMiddleware",
-        ),
         TEMPLATES=[
             {
                 "BACKEND": "django.template.backends.django.DjangoTemplates",
@@ -783,6 +802,7 @@ if __name__ == "__main__":
         ROOT_URLCONF=SimpleLazyObject(urlpatterns),
         SHOUTY_VARIABLES=True,
         SHOUTY_URLS=True,
+        **version_specific_settings,
     )
     django.setup()
     from django.template import Template, Context as CTX
@@ -1117,7 +1137,7 @@ if __name__ == "__main__":
             # type: () -> None
             t = TMPL(
                 """
-                {% if False and whooo == 2 or 0 and 1 and wheee and x == 2 or f is None and False is True or wheee == wheeee %}
+                {% if False and whooo == 2 or 0 and 1 and wheee and x == 2 or f == None and False == True or wheee == wheeee %}
                 whee
                 {% endif %}
                 """
@@ -1354,8 +1374,15 @@ if __name__ == "__main__":
                 "/admin/auth/user/{}/history/".format(self.user.pk),
                 "/admin/auth/user/{}/delete/".format(self.user.pk),
             )
+            dj19_skips = {
+                "/admin/doc/views/django.contrib.admin.sites.AdminSite.index/",
+                "/admin/doc/views/django.contrib.admin.options.ModelAdmin.change_view/",
+                "/admin/doc/views/django.contrib.admin.options.ModelAdmin.changelist_view/",
+            }
             for url in urls:
                 with self.subTest(url=url):
+                    if django.VERSION[0:2] <= (1, 9) and url in dj19_skips:
+                        self.skipTest("Django 1.9 doesn't support URL: {}".format(url))
                     response = self.client.get(url, follow=False)
                     self.assertStatusCode(response, 200)
 
