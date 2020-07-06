@@ -276,8 +276,14 @@ def create_exception_with_template_debug(context, part, exception_cls):
     if "extends_context" in render_context and render_context["extends_context"]:
         all_potential_contexts.extend(render_context.get("extends_context", []))
     # Who knows which order might be right for context or render context? not me.
-    all_potential_contexts.append(render_context.template)
-    all_potential_contexts.append(context.template)
+    # It's possible for the template attribute to not exist OR for it to be None
+    # in theory, so we'll guard against that.
+    render_context_template = getattr(render_context, 'template', None)  # type: Optional[Template]
+    if render_context_template is not None:
+        all_potential_contexts.append(render_context_template)
+    context_template = getattr(context, 'template', None)  # type: Optional[Template]
+    if context_template is not None:
+        all_potential_contexts.append(context.template)
     render_context_flat = render_context.flatten()
     # Inclusion nodes put their template into the context with themselves as a key.
     for k in render_context_flat:
