@@ -802,7 +802,7 @@ if __name__ == "__main__":
         ROOT_URLCONF=SimpleLazyObject(urlpatterns),
         SHOUTY_VARIABLES=True,
         SHOUTY_URLS=True,
-        **version_specific_settings,
+        **version_specific_settings
     )
     django.setup()
     from django.template import Template, Context as CTX
