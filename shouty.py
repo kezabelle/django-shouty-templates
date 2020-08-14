@@ -87,6 +87,8 @@ old_resolve_lookup = Variable._resolve_lookup
 old_url_render = URLNode.render
 old_if_render = IfNode.render
 
+ANY_TEMPLATE = "*"
+ANY_VARIABLE = "*"
 
 VARIABLE_BLACKLIST = {
     # When trying to render the technical 500 template, it accesses
@@ -95,7 +97,7 @@ VARIABLE_BLACKLIST = {
     # it fully, but it's a smashing great error that prevents the debug 500
     # from working otherwise.
     # TODO: Get fixed upstream?
-    "settings.SETTINGS_MODULE": ("*",),
+    "settings.SETTINGS_MODULE": (ANY_TEMPLATE,),
     # django-debug-toolbar SQL panel, makes use of a dictionary of queries,
     # whose values aren't always available.
     # TODO: Get fixed upstream?
@@ -118,12 +120,14 @@ VARIABLE_BLACKLIST = {
         "admin/index.html",
         "admin/app_index.html",
     ),  # used on the site/app index
-    "is_popup": ("*",),  # Used all over the shop: (), but not declared everywhere.
+    "is_popup": (
+        ANY_TEMPLATE,
+    ),  # Used all over the shop: (), but not declared everywhere.
     "cl.formset.errors": (
         "admin/change_list.html",
     ),  # Used on the changelist even if there's no formset?
     "show": (
-        "*",
+        ANY_TEMPLATE,
     ),  # date_hierarchy for the changelist doesn't actually always return a dictionary ...
     "cl.formset.is_multipart": (
         "admin/change_list.html",
@@ -131,20 +135,20 @@ VARIABLE_BLACKLIST = {
     "result.form.non_field_errors": (
         "admin/change_list_results.html",
     ),  # Used on the changelist ...
-    "can_change_related": ("*",),  # Used by related_widget_wrapper
-    "can_add_related": ("*",),  # Used by related_widget_wrapper
-    "can_delete_related": ("*",),  # Used by related_widget_wrapper
+    "can_change_related": (ANY_TEMPLATE,),  # Used by related_widget_wrapper
+    "can_add_related": (ANY_TEMPLATE,),  # Used by related_widget_wrapper
+    "can_delete_related": (ANY_TEMPLATE,),  # Used by related_widget_wrapper
     # Django's technical 500 templates (text & html) via get_traceback_data
-    "exception_type": ("*",),
-    "exception_value": ("*",),
-    "lastframe": ("*",),
-    "request_GET_items": ("*",),
-    "request_FILES_items": ("*",),
-    "request_COOKIES_items": ("*",),
+    "exception_type": (ANY_TEMPLATE,),
+    "exception_value": (ANY_TEMPLATE,),
+    "lastframe": (ANY_TEMPLATE,),
+    "request_GET_items": (ANY_TEMPLATE,),
+    "request_FILES_items": (ANY_TEMPLATE,),
+    "request_COOKIES_items": (ANY_TEMPLATE,),
     # Django's "debug" context processor only fills debug and sql_queries if
     # DEBUG=True and the user's IP is in INTERNAL_IPS
-    "debug": ("*",),
-    "sql_queries": ("*",),
+    "debug": (ANY_TEMPLATE,),
+    "sql_queries": (ANY_TEMPLATE,),
     "site_title": ("admin_honeypot/login.html",),
     "site_header": ("admin_honeypot/login.html",),
     # Django pipeline templates.
@@ -240,7 +244,7 @@ def variable_blacklist():
     else:
         for var in user_blacklist:
             variables_by_template.setdefault(var, [])
-            variables_by_template[var].append("*")
+            variables_by_template[var].append(ANY_TEMPLATE)
     return variables_by_template
 
 
@@ -279,10 +283,12 @@ def create_exception_with_template_debug(context, part, exception_cls):
     # Who knows which order might be right for context or render context? not me.
     # It's possible for the template attribute to not exist OR for it to be None
     # in theory, so we'll guard against that.
-    render_context_template = getattr(render_context, 'template', None)  # type: Optional[Template]
+    render_context_template = getattr(
+        render_context, "template", None
+    )  # type: Optional[Template]
     if render_context_template is not None:
         all_potential_contexts.append(render_context_template)
-    context_template = getattr(context, 'template', None)  # type: Optional[Template]
+    context_template = getattr(context, "template", None)  # type: Optional[Template]
     if context_template is not None:
         all_potential_contexts.append(context.template)
     render_context_flat = render_context.flatten()
@@ -388,12 +394,18 @@ def new_resolve_lookup(self, context):
     try:
         return old_resolve_lookup(self, context)
     except VariableDoesNotExist as e:
+        # Given the token {{ xyz }}
+        # it should be possible to NOT raise the MissingVariable exception by setting:
+        # "xyz": ['*']
+        # "xyz": ['path/to/specific/template.html', 'other/template.html']
+        # "*": ['path/to/template.html']
         whole_var = self.var
         blacklist = variable_blacklist()
         whitelisted = blacklist.get(whole_var, [])
-        not_blacklisted = whole_var not in blacklist
-        whitelisted_by_template = len(whitelisted) > 0
-        if not_blacklisted or whitelisted_by_template:
+        not_being_ignored = whole_var not in blacklist
+        ignoring_variable_by_template = len(whitelisted) > 0
+        ignoring_all_by_template = blacklist.get(ANY_VARIABLE, [])
+        if not_being_ignored or ignoring_variable_by_template:
             try:
                 (
                     template_name,
@@ -470,14 +482,19 @@ def new_resolve_lookup(self, context):
             if context.template.engine.debug and exc_info:
                 exc_info["message"] = msg
                 exc.template_debug = exc_info
-
-            if "*" in whitelisted:
-                logger.debug("Ignoring %s globally", whole_var)
+            if ANY_TEMPLATE in whitelisted:
+                logger.debug("Ignoring '%s' globally via *", whole_var)
             elif template_name in whitelisted:
-                logger.debug("Ignoring %s for template %s", whole_var, template_name)
+                logger.debug(
+                    "Ignoring '%s' for template '%s'", whole_var, template_name
+                )
+            elif template_name in ignoring_all_by_template:
+                logger.debug(
+                    "Ignoring '%s' via * for template '%s'", whole_var, template_name
+                )
             elif any(x in whitelisted for x in all_template_names):
                 logger.debug(
-                    "Ignoring %s for templates %r", whole_var, all_template_names
+                    "Ignoring '%s' for templates %r", whole_var, all_template_names
                 )
             else:
                 raise exc
@@ -574,7 +591,7 @@ def new_url_render(self, context):
     value = old_url_render(self, context)
     outvar = self.asvar
     if outvar is not None and context[outvar] == "":
-        key = (str(self.view_name.var), outvar)
+        key = (str(self.view_name.var), str(outvar))
         if key not in url_blacklist():
             try:
                 (
@@ -666,7 +683,27 @@ def check_user_blacklists(app_configs, **kwargs):
                     )
                 )
             else:
-                if template_count < 1:
+                if var == ANY_VARIABLE and template_count < 1:
+                    errors.append(
+                        checks.Error(
+                            "Magic variable * has an unexpected templates defintion".format(
+                                var
+                            ),
+                            hint="Using * requires you to specify a specific template (or set of templates) to ignore",
+                            obj="settings.SHOUTY_VARIABLE_BLACKLIST",
+                        )
+                    )
+                elif var == ANY_VARIABLE and ANY_TEMPLATE in templates:
+                    errors.append(
+                        checks.Error(
+                            "Magic variable * has an unexpected templates defintion".format(
+                                var
+                            ),
+                            hint="Using * for both the variable and template isn't supported, use settings.SHOUTY_VARIABLES = False",
+                            obj="settings.SHOUTY_VARIABLE_BLACKLIST",
+                        )
+                    )
+                elif template_count < 1:
                     errors.append(
                         checks.Error(
                             "Key {} has an unexpected templates defintion".format(var),
@@ -764,7 +801,7 @@ if __name__ == "__main__":
 
     if django.VERSION[0:2] <= (1, 9):
         version_specific_settings = {
-            'MIDDLEWARE_CLASSES': [
+            "MIDDLEWARE_CLASSES": [
                 "django.contrib.sessions.middleware.SessionMiddleware",
                 "django.contrib.auth.middleware.AuthenticationMiddleware",
                 "django.contrib.messages.middleware.MessageMiddleware",
@@ -772,7 +809,7 @@ if __name__ == "__main__":
         }
     else:
         version_specific_settings = {
-            'MIDDLEWARE': [
+            "MIDDLEWARE": [
                 "django.contrib.sessions.middleware.SessionMiddleware",
                 "django.contrib.auth.middleware.AuthenticationMiddleware",
                 "django.contrib.messages.middleware.MessageMiddleware",
@@ -808,11 +845,37 @@ if __name__ == "__main__":
         ROOT_URLCONF=SimpleLazyObject(urlpatterns),
         SHOUTY_VARIABLES=True,
         SHOUTY_URLS=True,
+        LOGGING={
+            "version": 1,
+            "disable_existing_loggers": False,
+            "formatters": {
+                "console": {
+                    "format": "[%(levelname)s] %(name)s -> %(funcName)s -> %(message)s"
+                }
+            },
+            "handlers": {
+                "console": {"class": "logging.StreamHandler", "formatter": "console"},
+            },
+            "root": {"handlers": ["console"], "level": "ERROR",},
+            "loggers": {
+                "shouty": {
+                    "handlers": ["console"],
+                    "level": "DEBUG",
+                    "propagate": False,
+                },
+                "django.request": {
+                    "handlers": ["console"],
+                    "level": "ERROR",
+                    "propagate": False,
+                },
+            },
+        },
         **version_specific_settings
     )
     django.setup()
     from django.template import Template, Context as CTX
     from django.forms import IntegerField
+    from django.template.loader import render_to_string
 
     class TMPL(Template):  # type: ignore
         def __init__(self, *args, **kwargs):
@@ -825,7 +888,7 @@ if __name__ == "__main__":
         def assertRaisesWithTemplateDebug(
             self, exception_type, exception_repr, debug_data
         ):
-            # type: (Type[Exception], Text, Dict[str, Any]) -> Iterator[None]
+            # type: (Type[Exception], Text, Dict[Text, Any]) -> Iterator[None]
             try:
                 yield
             except exception_type as exc:
@@ -884,46 +947,6 @@ if __name__ == "__main__":
                 {"line": 3, "start": 76, "end": 77, "during": "b"},
             ):
                 t.render(CTX({"a": 1, "be": 2}))
-
-        def test_silencing(self):
-            # type: () -> None
-            """ Adding a variable to the blacklist works OK """
-            t = TMPL("this works: {{ a }}")
-            with override_settings(SHOUTY_VARIABLE_BLACKLIST=("a",)):
-                t.render(CTX({}))
-            with override_settings(SHOUTY_VARIABLE_BLACKLIST={"a": [UNKNOWN_SOURCE]}):
-                t.render(CTX({}))
-            with override_settings(SHOUTY_VARIABLE_BLACKLIST={"a": ["*"]}):
-                t.render(CTX({}))
-            with override_settings(SHOUTY_VARIABLE_BLACKLIST={"a": ["test.html"]}):
-                with self.assertRaises(self.MissingVariable):
-                    t.render(CTX({}))
-
-        def test_checks(self):
-            # type: () -> None
-            """ system checks work OK """
-            with override_settings(SHOUTY_VARIABLE_BLACKLIST=("a",)):
-                self.assertEqual(check_user_blacklists(None), [])
-            with override_settings(SHOUTY_VARIABLE_BLACKLIST={"a": [UNKNOWN_SOURCE]}):
-                self.assertEqual(check_user_blacklists(None), [])
-            with override_settings(SHOUTY_VARIABLE_BLACKLIST={"a": ["*"]}):
-                self.assertEqual(check_user_blacklists(None), [])
-            with override_settings(SHOUTY_VARIABLE_BLACKLIST={"a": ["test.html"]}):
-                self.assertEqual(check_user_blacklists(None), [])
-            with override_settings(SHOUTY_VARIABLE_BLACKLIST="a"):
-                self.assertEqual(
-                    check_user_blacklists(None)[0].msg,
-                    "Setting appears to be a string",
-                )
-            with override_settings(SHOUTY_VARIABLE_BLACKLIST=1):
-                self.assertEqual(
-                    check_user_blacklists(None)[0].msg,
-                    "Setting doesn't appear to be a sequence",
-                )
-            with override_settings(SHOUTY_VARIABLE_BLACKLIST=(1,)):
-                self.assertEqual(
-                    check_user_blacklists(None)[0].msg, "Expected 1 to be a string",
-                )
 
         def test_nested_tokens_on_dict(self):
             # type: () -> None
@@ -1243,6 +1266,131 @@ if __name__ == "__main__":
             ):
                 t.render(CTX())
 
+    class SystemChecksTestCase(SimpleTestCase):  # type: ignore
+        def test_tuple_or_list_iterable_ignored_everywhere(self):
+            # type: () -> None
+            with override_settings(SHOUTY_VARIABLE_BLACKLIST=("a",)):
+                self.assertEqual(check_user_blacklists(None), [])
+
+        def test_dict_allows_non_file_templates(self):
+            # type: () -> None
+            with override_settings(SHOUTY_VARIABLE_BLACKLIST={"a": [UNKNOWN_SOURCE]}):
+                self.assertEqual(check_user_blacklists(None), [])
+
+        def test_dict_allows_ignoring_var_in_all_templates(self):
+            # type: () -> None
+            with override_settings(SHOUTY_VARIABLE_BLACKLIST={"a": [ANY_TEMPLATE]}):
+                self.assertEqual(check_user_blacklists(None), [])
+
+        def test_dict_allows_ignoring_var_in_single_or_many_specific_templates(self):
+            # type: () -> None
+            with override_settings(SHOUTY_VARIABLE_BLACKLIST={"a": ["test.html"]}):
+                self.assertEqual(check_user_blacklists(None), [])
+
+        def test_catches_attempt_to_use_parens_for_1tuple_but_missing_trailing_comma(
+            self,
+        ):
+            # type: () -> None
+            with override_settings(SHOUTY_VARIABLE_BLACKLIST="a"):
+                self.assertEqual(
+                    check_user_blacklists(None)[0].msg,
+                    "Setting appears to be a string",
+                )
+
+        def test_catches_isnt_a_string_and_also_isnt_an_iterable(self):
+            # type: () -> None
+            with override_settings(SHOUTY_VARIABLE_BLACKLIST=1):
+                self.assertEqual(
+                    check_user_blacklists(None)[0].msg,
+                    "Setting doesn't appear to be a sequence",
+                )
+
+        def test_catches_iterable_containing_non_strings(self):
+            # type: () -> None
+            with override_settings(SHOUTY_VARIABLE_BLACKLIST=(1,)):
+                self.assertEqual(
+                    check_user_blacklists(None)[0].msg, "Expected 1 to be a string",
+                )
+
+        def test_magic_variable_must_have_templates_specified(self):
+            # type: () -> None
+            with override_settings(SHOUTY_VARIABLE_BLACKLIST={"*": []}):
+                error = check_user_blacklists(None)[0]
+                self.assertEqual(
+                    error.msg, "Magic variable * has an unexpected templates defintion"
+                )
+                self.assertEqual(
+                    error.hint,
+                    "Using * requires you to specify a specific template (or set of templates) to ignore",
+                )
+
+        def test_magic_variable_must_not_include_magic_template(self):
+            with override_settings(SHOUTY_VARIABLE_BLACKLIST={"*": ["asdf.html", "*"]}):
+                error = check_user_blacklists(None)[0]
+                self.assertEqual(
+                    error.msg, "Magic variable * has an unexpected templates defintion"
+                )
+                self.assertEqual(
+                    error.hint,
+                    "Using * for both the variable and template isn't supported, use settings.SHOUTY_VARIABLES = False",
+                )
+
+        def test_magic_variable_has_ok_templates(self):
+            # type: () -> None
+            with override_settings(SHOUTY_VARIABLE_BLACKLIST={"*": ["asdf.html"]}):
+                self.assertEqual(check_user_blacklists(None), [])
+
+        def test_magic_template_has_ok_variable(self):
+            # type: () -> None
+            with override_settings(SHOUTY_VARIABLE_BLACKLIST={"x": ["*"]}):
+                self.assertEqual(check_user_blacklists(None), [])
+
+    class SilencingTestCase(CustomAssertions, SimpleTestCase):  # type: ignore
+        def setUp(self):
+            # type: () -> None
+            from shouty import MissingVariable
+
+            self.MissingVariable = MissingVariable
+
+        def test_silencing_variations_for_a_single_blacklisted_item(self):
+            # type: () -> None
+            """ Adding a variable to the blacklist works OK """
+            t = TMPL("this works: {{ a }}")
+            with override_settings(SHOUTY_VARIABLE_BLACKLIST=("a",)):
+                t.render(CTX({}))
+            with override_settings(SHOUTY_VARIABLE_BLACKLIST={"a": [UNKNOWN_SOURCE]}):
+                t.render(CTX({}))
+            with override_settings(SHOUTY_VARIABLE_BLACKLIST={"a": [ANY_TEMPLATE]}):
+                t.render(CTX({}))
+            with override_settings(SHOUTY_VARIABLE_BLACKLIST={"a": ["test.html"]}):
+                with self.assertRaises(self.MissingVariable):
+                    t.render(CTX({}))
+
+        def test_silencing_all_in_template(self):
+            # type: () -> None
+            """
+            Allow for essentially doing "All variables in this template"
+            https://github.com/kezabelle/django-shouty-templates/issues/6
+            """
+            with override_settings(
+                SHOUTY_VARIABLE_BLACKLIST={ANY_VARIABLE: ["admin/filter.html"]}
+            ):
+                render_to_string("admin/filter.html")
+                with self.assertRaises(self.MissingVariable):
+                    render_to_string("admin/login.html")
+
+            with override_settings(
+                SHOUTY_VARIABLE_BLACKLIST={ANY_VARIABLE: ["admin/filter2.html"]}
+            ):
+                with self.assertRaisesWithTemplateDebug(
+                    self.MissingVariable,
+                    "Variable 'title' in template 'admin/filter.html' does not resolve.\n"
+                    "You may silence this globally by adding 'title' to the settings.SHOUTY_VARIABLE_BLACKLIST iterable.\n"
+                    "You may silence this occurance only by adding admin/filter.html to the 'title' key to the settings.SHOUTY_VARIABLE_BLACKLIST iterable.",
+                    {"start": 52, "end": 57, "during": "title"},
+                ):
+                    render_to_string("admin/filter.html")
+
     class ReadmeExampleTestCase(CustomAssertions, SimpleTestCase):  # type: ignore
         def setUp(self):
             # type: () -> None
@@ -1351,6 +1499,10 @@ if __name__ == "__main__":
             r2 = self.client.get("/admin/", follow=True)
             self.assertStatusCode(r2, 200)
 
+        @skipIf(
+            hasattr(TestCase, "subTest") is False,
+            "using subTest requires running under Python 3+",
+        )
         def test_get_requests_which_should_render_ok(self):
             # type: () -> None
             """ normal requests to these admin & admindocs pages should not raise MissingVariable """
@@ -1422,7 +1574,7 @@ if __name__ == "__main__":
                             k
                         )
                     )
-                elif len(v) > 1 and "*" in v:
+                elif len(v) > 1 and ANY_TEMPLATE in v:
                     self.fail(
                         "Key {!s} of the VARIABLE_BLACKLIST has templates defined and also a wildcard: {!r}".format(
                             k, v
@@ -1435,7 +1587,7 @@ if __name__ == "__main__":
                             k
                         )
                     )
-                elif len(v) > 1 and "*" in v:
+                elif len(v) > 1 and ANY_TEMPLATE in v:
                     self.fail(
                         "Key {!s} of the IF_VARIABLE_BLACKLIST has templates defined and also a wildcard: {!r}".format(
                             k, v
@@ -1467,6 +1619,8 @@ if __name__ == "__main__":
         extra_tests=(
             test_runner.test_loader.loadTestsFromTestCase(BasicUsageTestCase),
             test_runner.test_loader.loadTestsFromTestCase(UrlTestCase),
+            test_runner.test_loader.loadTestsFromTestCase(SystemChecksTestCase),
+            test_runner.test_loader.loadTestsFromTestCase(SilencingTestCase),
             test_runner.test_loader.loadTestsFromTestCase(ReadmeExampleTestCase),
             test_runner.test_loader.loadTestsFromTestCase(CommonAppsTestCase),
             test_runner.test_loader.loadTestsFromTestCase(

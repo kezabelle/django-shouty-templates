@@ -85,7 +85,16 @@ May also be a ``dict`` of ``str`` keys and a sequence (eg: ``tuple`` or ``list``
         "chef.can_add_cakes": ("*",),
         "my_sometimes_set_variable": ["admin/custom_view.html", "admin/custom_view_detail.html"],
         "random_in_memory_template": ["<unknown source>"],
+        "*": ["admin/login.html", "<unknown source>"],
     }
+
+Of special note is the use of ``*``, which has a more magical meaning.
+
+- Using ``"key": ["*"]`` would silence errors about the variable named ``key`` in **all templates**
+- Using ``"*": ["path/to/template.html"]`` would silence **all** variable errors in **that specific template** only (see `GitHub issue 6`_)
+
+And also the far less frequently useful ``<unknown source>`` or ``django.template.base.UNKNOWN_SOURCE`` which is essentially usually for ``Template`` instances
+not loaded from a *file on disk*
 
 settings.SHOUTY_URL_BLACKLIST
 +++++++++++++++++++++++++++++
@@ -119,3 +128,4 @@ It's `FreeBSD`_. There's should be a ``LICENSE`` file in the root of the reposit
 
 .. _FreeBSD: http://en.wikipedia.org/wiki/BSD_licenses#2-clause_license_.28.22Simplified_BSD_License.22_or_.22FreeBSD_License.22.29
 .. _PyPI: https://pypi.org/
+.. _GitHub issue 6: https://github.com/kezabelle/django-shouty-templates/issues/6
