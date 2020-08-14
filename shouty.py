@@ -169,6 +169,7 @@ IF_VARIABLE_BLACKLIST = {
         "admin_doc/model_detail.html",
         "admin_doc/view_detail.html",
         "admin_doc/bookmarklets.html",
+        "admin_doc/missing_docutils.html",
         "pipeline/css.html",
     ),
     # accessing admindocs detailed model information has: {% if field.help_text %} - ...
