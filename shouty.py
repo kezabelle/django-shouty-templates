@@ -1394,7 +1394,7 @@ if __name__ == "__main__":
                     "Variable 'title' in template 'admin/filter.html' does not resolve.\n"
                     "You may silence this globally by adding 'title' to the settings.SHOUTY_VARIABLE_BLACKLIST iterable.\n"
                     "You may silence this occurance only by adding admin/filter.html to the 'title' key to the settings.SHOUTY_VARIABLE_BLACKLIST iterable.",
-                    {"start": 52, "end": 57, "during": "title"},
+                    {"during": "title"},
                 ):
                     render_to_string("admin/filter.html")
 
