@@ -1,5 +1,10 @@
 Change history for django-shouty-templates
 ------------------------------------------
+
+?next?
+^^^^^^
+* Bugfix: when the ``render_context`` doesn't have a template *or* it's ``None`` it's now properly skipped.
+
 0.1.6
 ^^^^^^
 * Feature: Ignore variables which prevented much of REST Framework's browsable API from working.
