@@ -3,6 +3,7 @@ Change history for django-shouty-templates
 
 ?next?
 ^^^^^^
+* Bugfix: Attempt to fix parsing of where a missing variable occurs within things like ``{% blocktrans with filter_title=title %}``
 * Bugfix: when the ``render_context`` doesn't have a template *or* it's ``None`` it's now properly skipped.
 
 0.1.6

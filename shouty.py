@@ -2,6 +2,7 @@
 from __future__ import absolute_import, unicode_literals
 
 import logging
+import re
 from collections import namedtuple
 
 from django.core import checks
@@ -325,6 +326,7 @@ def create_exception_with_template_debug(context, part, exception_cls):
             FILTER_SEPARATOR,
             FILTER_ARGUMENT_SEPARATOR,
             " ",
+            "=",  # for {% blocktrans with x=y %}
             "{",
         )
         proceeded_by = (
@@ -350,24 +352,28 @@ def create_exception_with_template_debug(context, part, exception_cls):
 
             # Where does the line/token start in the original, newlines ridden source?
             first_occurance_of_token = src.find(token, match_start - 1)  # type: int
-            start = src.find(part, first_occurance_of_token)
+            all_occurances_in_token = re.finditer(part, token)
+            for submatch in all_occurances_in_token:
+                submatch_start, submatch_end = submatch.span()
+                subtoken = token[submatch_start:submatch_end]
+                start = src.find(part, first_occurance_of_token + submatch_start)
 
-            if start > -1:
-                end = start + len(part)
-                if src[start - 1] not in preceeded_by:
-                    continue
-                elif src[end] not in proceeded_by:
-                    continue
+                if start > -1:
+                    end = start + len(part)
+                    if src[start - 1] not in preceeded_by:
+                        continue
+                    elif src[end] not in proceeded_by:
+                        continue
 
-                exc_info = _template.get_exception_info(
-                    exception_cls("ignored"), faketoken(position=(start, end))
-                )  # type: Dict[Text, Any]
-                if _origin.template_name is None:
-                    template_name = UNKNOWN_SOURCE
-                else:
-                    template_name = _origin.template_name
-                del _template, _origin, start, end
-                return template_name, exc_info, template_names
+                    exc_info = _template.get_exception_info(
+                        exception_cls("ignored"), faketoken(position=(start, end))
+                    )  # type: Dict[Text, Any]
+                    if _origin.template_name is None:
+                        template_name = UNKNOWN_SOURCE
+                    else:
+                        template_name = _origin.template_name
+                    del _template, _origin, start, end
+                    return template_name, exc_info, template_names
     return UNKNOWN_SOURCE, {}, template_names
 
 
