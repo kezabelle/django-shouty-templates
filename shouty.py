@@ -153,6 +153,12 @@ VARIABLE_BLACKLIST = {
     "site_header": ("admin_honeypot/login.html",),
     # Django pipeline templates.
     "media": ("pipeline/css.html",),
+    # In Django 3.1 this ... might be necessary. IDK I can't recall
+    # if the request context processor being missing actually causes
+    # a system check error for the admin.
+    "request.path": ('admin/app_list.html',),
+    # In Django 3.1+ this has turned up...
+    "show_changelinks": ('admin/app_list.html',),
 }  # type: Dict[str, Tuple[Text,...]]
 
 IF_VARIABLE_BLACKLIST = {
