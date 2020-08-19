@@ -771,6 +771,7 @@ default_app_config = "shouty.Shout"
 
 
 if __name__ == "__main__":
+    from os import environ
     from unittest import skipIf
     from contextlib import contextmanager
     from django.test import TestCase, SimpleTestCase, override_settings
@@ -785,6 +786,11 @@ if __name__ == "__main__":
 
         if django.VERSION[0:2] > (1, 9):
             EXTRA_INSTALLED_APPS += ("admin_honeypot",)
+    except ImportError:
+        pass
+    try:
+        import crispy_forms
+        EXTRA_INSTALLED_APPS += ("crispy_forms",)
     except ImportError:
         pass
 
@@ -867,7 +873,7 @@ if __name__ == "__main__":
             "loggers": {
                 "shouty": {
                     "handlers": ["console"],
-                    "level": "DEBUG",
+                    "level": environ.get("SHOUTY_LOGGING", "WARNING"),
                     "propagate": False,
                 },
                 "django.request": {
@@ -881,7 +887,7 @@ if __name__ == "__main__":
     )
     django.setup()
     from django.template import Template, Context as CTX
-    from django.forms import IntegerField
+    from django.forms import IntegerField, CharField
     from django.template.loader import render_to_string
 
     class TMPL(Template):  # type: ignore
@@ -1560,6 +1566,46 @@ if __name__ == "__main__":
             """ Versions <= 1.1.0 don't set 'site_title' or 'site_header' variables """
             response = self.client.get("/admin_honeypot/login/", follow=False)
             self.assertStatusCode(response, 200)
+
+        @skipIf(
+            "crispy_forms" not in EXTRA_INSTALLED_APPS,
+            "django-crispy-forms is not installed",
+        )
+        def test_crispy_forms_should_render_ok(self):
+            # type: () -> None
+            """
+            Silencing whole templates in a third party app, and crispy forms was the example, and there's a variable
+            'html5_required' which is not being handled well:
+
+            > shouty.MissingVariable: Variable 'html5_required' in template '<unknown source>' does not resolve.
+            > You may silence this globally by adding 'html5_required' to the settings.SHOUTY_VARIABLE_BLACKLIST iterable.
+            > You may silence this occurance only by adding one of 'bootstrap4/field.html', 'bootstrap4/uni_form.html' to the 'html5_required' key to the settings.SHOUTY_VARIABLE_BLACKLIST iterable.
+
+            Note that first we should know the template source really, and additionally it's not part of the output of
+            options...
+            """
+            class MyForm(Form):
+                example1 = IntegerField()
+                example2 = CharField()
+
+            with override_settings(CRISPY_TEMPLATE_PACK="bootstrap4", SHOUTY_VARIABLE_BLACKLIST={'*': [
+                'bootstrap4/uni_form.html',
+                'bootstrap4/field.html',
+                # UNKNOWN_SOURCE,
+                'bootstrap4/layout/help_text_and_errors.html',
+            ]}):
+                t = TMPL(
+                    """
+                    {% load crispy_forms_tags %}
+                    <form method="post" class="uniForm">
+                        {{ my_form|crispy }}
+                    </form>
+                    """
+                )
+
+                t.render(CTX({
+                    'my_form': MyForm(data=None, files=None)
+                }))
 
         def test_example_404(self):
             # type: () -> None
