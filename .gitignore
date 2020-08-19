@@ -5,3 +5,5 @@ dist
 *.egg*
 .mypy_cache
 build/*
+.direnv/*
+.envrc
