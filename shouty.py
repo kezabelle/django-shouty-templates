@@ -394,6 +394,9 @@ def create_exception_with_template_debug(context, part, exception_cls):
                         template_name = _origin.template_name
                     del _template, _origin, start, end
                     return template_name, exc_info, template_names
+
+    if UNKNOWN_SOURCE not in template_names:
+        template_names.append(UNKNOWN_SOURCE)
     return UNKNOWN_SOURCE, {}, template_names
 
 
