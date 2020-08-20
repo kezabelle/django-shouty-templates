@@ -314,6 +314,25 @@ def create_exception_with_template_debug(context, part, exception_cls):
 
     assert len(contexts_to_search) <= len(all_potential_contexts)
 
+    # We don't want {{ username }} to be highlighted for an error related to {{ name }}
+    # so we check the previous/next character from the token's match
+    preceeded_by = (
+        VARIABLE_ATTRIBUTE_SEPARATOR,
+        FILTER_SEPARATOR,
+        FILTER_ARGUMENT_SEPARATOR,
+        " ",
+        "=",  # for {% blocktrans with x=y %}
+        "{",
+    )
+    proceeded_by = (
+        VARIABLE_ATTRIBUTE_SEPARATOR,
+        FILTER_SEPARATOR,
+        FILTER_ARGUMENT_SEPARATOR,
+        " ",
+        "=",
+        "}",
+    )
+
     template_names = []  # type: List[Text]
 
     for parent in contexts_to_search:
@@ -332,24 +351,6 @@ def create_exception_with_template_debug(context, part, exception_cls):
 
         src = _template.source  # type: Text
 
-        # We don't want {{ username }} to be highlighted for an error related to {{ name }}
-        # so we check the previous/next character from the token's match
-        preceeded_by = (
-            VARIABLE_ATTRIBUTE_SEPARATOR,
-            FILTER_SEPARATOR,
-            FILTER_ARGUMENT_SEPARATOR,
-            " ",
-            "=",  # for {% blocktrans with x=y %}
-            "{",
-        )
-        proceeded_by = (
-            VARIABLE_ATTRIBUTE_SEPARATOR,
-            FILTER_SEPARATOR,
-            FILTER_ARGUMENT_SEPARATOR,
-            " ",
-            "=",
-            "}",
-        )
         # Just skip every subsequent check if the token/variable/part isn't anywhere in the template
         # which is sometimes the case if walking backwards through a series of templates, and sometimes
         # (eg: in crispy_forms) the variable never exists in any template file (html5_required) so we can
