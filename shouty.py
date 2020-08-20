@@ -771,7 +771,7 @@ default_app_config = "shouty.Shout"
 
 
 if __name__ == "__main__":
-    from os import environ
+    import sys, os
     from unittest import skipIf
     from contextlib import contextmanager
     from django.test import TestCase, SimpleTestCase, override_settings
@@ -873,7 +873,7 @@ if __name__ == "__main__":
             "loggers": {
                 "shouty": {
                     "handlers": ["console"],
-                    "level": environ.get("SHOUTY_LOGGING", "WARNING"),
+                    "level": os.environ.get("SHOUTY_LOGGING", "WARNING"),
                     "propagate": False,
                 },
                 "django.request": {
@@ -887,7 +887,7 @@ if __name__ == "__main__":
     )
     django.setup()
     from django.template import Template, Context as CTX
-    from django.forms import IntegerField, CharField
+    from django.forms import IntegerField
     from django.template.loader import render_to_string
 
     class TMPL(Template):  # type: ignore
@@ -1557,6 +1557,23 @@ if __name__ == "__main__":
                     response = self.client.get(url, follow=False)
                     self.assertStatusCode(response, 200)
 
+        def test_example_404(self):
+            # type: () -> None
+            """ The technical 404 page should not itself cause a 500 error """
+            with override_settings(DEBUG=True):
+                response = self.client.get("/favicon.ico", follow=False)
+                self.assertStatusCode(response, 404)
+            with override_settings(DEBUG=False):
+                response = self.client.get("/favicon.ico", follow=False)
+                self.assertStatusCode(response, 404)
+
+    class AdminHoneypotTestCase(TestCase):  # type: ignore
+        def setUp(self):
+            # type: () -> None
+            from shouty import MissingVariable
+
+            self.MissingVariable = MissingVariable
+
         @skipIf(
             "admin_honeypot" not in EXTRA_INSTALLED_APPS,
             "django-admin-honeypot is not installed",
@@ -1567,11 +1584,20 @@ if __name__ == "__main__":
             response = self.client.get("/admin_honeypot/login/", follow=False)
             self.assertStatusCode(response, 200)
 
+    class CrispyFormsTestCase(TestCase):  # type: ignore
+        def setUp(self):
+            # type: () -> None
+            from shouty import MissingVariable
+
+            self.MissingVariable = MissingVariable
+
         @skipIf(
             "crispy_forms" not in EXTRA_INSTALLED_APPS,
             "django-crispy-forms is not installed",
         )
-        def test_crispy_forms_should_render_ok(self):
+        def test_crispy_forms_should_render_ok_and_allow_silencing_all_for_a_template(
+            self,
+        ):
             # type: () -> None
             """
             Silencing whole templates in a third party app, and crispy forms was the example, and there's a variable
@@ -1584,16 +1610,20 @@ if __name__ == "__main__":
             Note that first we should know the template source really, and additionally it's not part of the output of
             options...
             """
+
             class MyForm(Form):
                 example1 = IntegerField()
-                example2 = CharField()
 
-            with override_settings(CRISPY_TEMPLATE_PACK="bootstrap4", SHOUTY_VARIABLE_BLACKLIST={'*': [
-                'bootstrap4/uni_form.html',
-                'bootstrap4/field.html',
-                # UNKNOWN_SOURCE,
-                'bootstrap4/layout/help_text_and_errors.html',
-            ]}):
+            with override_settings(
+                CRISPY_TEMPLATE_PACK="bootstrap4",
+                SHOUTY_VARIABLE_BLACKLIST={
+                    "*": [
+                        "bootstrap4/uni_form.html",
+                        "bootstrap4/field.html",
+                        "bootstrap4/layout/help_text_and_errors.html",
+                    ]
+                },
+            ):
                 t = TMPL(
                     """
                     {% load crispy_forms_tags %}
@@ -1603,19 +1633,46 @@ if __name__ == "__main__":
                     """
                 )
 
-                t.render(CTX({
-                    'my_form': MyForm(data=None, files=None)
-                }))
+                t.render(CTX({"my_form": MyForm(data=None, files=None)}))
 
-        def test_example_404(self):
+        @skipIf(
+            "crispy_forms" not in EXTRA_INSTALLED_APPS,
+            "django-crispy-forms is not installed",
+        )
+        def test_crispy_forms_should_render_ok_and_allow_ignoring_a_specific_variable(
+            self,
+        ):
             # type: () -> None
-            """ The technical 404 page should not itself cause a 500 error """
-            with override_settings(DEBUG=True):
-                response = self.client.get("/favicon.ico", follow=False)
-                self.assertStatusCode(response, 404)
-            with override_settings(DEBUG=False):
-                response = self.client.get("/favicon.ico", follow=False)
-                self.assertStatusCode(response, 404)
+            """
+            This SHOULD behave the same as `test_crispy_forms_should_render_ok_and_allow_silencing_all_for_a_template`
+            but currently doesn't, having a key of `"html5_required": ["bootstrap4/field.html"]` silences the
+            error even though it already should be silenced by `"*"`
+            """
+
+            class MyForm(Form):
+                example1 = IntegerField()
+
+            with override_settings(
+                CRISPY_TEMPLATE_PACK="bootstrap4",
+                SHOUTY_VARIABLE_BLACKLIST={
+                    "*": [
+                        "bootstrap4/uni_form.html",
+                        "bootstrap4/field.html",
+                        "bootstrap4/layout/help_text_and_errors.html",
+                    ],
+                    "html5_required": ["bootstrap4/field.html"],
+                },
+            ):
+                t = TMPL(
+                    """
+                    {% load crispy_forms_tags %}
+                    <form method="post" class="uniForm">
+                        {{ my_form|crispy }}
+                    </form>
+                    """
+                )
+                with self.assertRaises(self.MissingVariable):
+                    t.render(CTX({"my_form": MyForm(data=None, files=None)}))
 
     class InternalVariableBlacklistTestCase(SimpleTestCase):  # type: ignore
         def test_im_not_an_idiot(self):
@@ -1667,18 +1724,44 @@ if __name__ == "__main__":
 
     test_runner = DiscoverRunner(interactive=False, verbosity=2)
 
-    failures = test_runner.run_tests(
-        test_labels=(),
-        extra_tests=(
-            test_runner.test_loader.loadTestsFromTestCase(BasicUsageTestCase),
-            test_runner.test_loader.loadTestsFromTestCase(UrlTestCase),
-            test_runner.test_loader.loadTestsFromTestCase(SystemChecksTestCase),
-            test_runner.test_loader.loadTestsFromTestCase(SilencingTestCase),
-            test_runner.test_loader.loadTestsFromTestCase(ReadmeExampleTestCase),
-            test_runner.test_loader.loadTestsFromTestCase(CommonAppsTestCase),
-            test_runner.test_loader.loadTestsFromTestCase(
-                InternalVariableBlacklistTestCase
-            ),
-            test_runner.test_loader.loadTestsFromTestCase(MyPyTestCase),
-        ),
-    )
+    test_cases = {
+        "basic": BasicUsageTestCase,
+        "url": UrlTestCase,
+        "checks": SystemChecksTestCase,
+        "silencing": SilencingTestCase,
+        "readme": ReadmeExampleTestCase,
+        "common": CommonAppsTestCase,
+        "honeypot": AdminHoneypotTestCase,
+        "crispy": CrispyFormsTestCase,
+        "internal": InternalVariableBlacklistTestCase,
+        "mypy": MyPyTestCase,
+    }
+
+    test_labels = sys.argv
+    if test_labels is None:
+        test_labels = ()
+    if __file__ and __file__ in test_labels:
+        test_labels.remove(__file__)
+
+    test_cases_to_run = ()
+    if test_labels:
+        for test_label in test_labels:
+            if test_label not in test_cases:
+                sys.exit(
+                    "Unknown test case label, expected one of: {!s}".format(
+                        ", ".join(sorted(test_cases.keys()))
+                    )
+                )
+            else:
+                test_case = test_cases[test_label]
+                sys.stdout.write("Adding {!r} to run\n".format(test_label))
+                test_cases_to_run += (
+                    test_runner.test_loader.loadTestsFromTestCase(test_case),
+                )
+    else:
+        test_cases_to_run += tuple(
+            test_runner.test_loader.loadTestsFromTestCase(test_case)
+            for test_case in test_cases.values()
+        )
+
+    failures = test_runner.run_tests(test_labels=(), extra_tests=test_cases_to_run,)
