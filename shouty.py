@@ -408,11 +408,13 @@ def new_resolve_lookup(self, context):
         # "*": ['path/to/template.html']
         whole_var = self.var
         blacklist = variable_blacklist()
-        whitelisted = blacklist.get(whole_var, [])
+        ignored_templates_for_this_var = blacklist.get(whole_var, [])
+        ignored_templates_for_any_var = blacklist.get(ANY_VARIABLE, [])
         not_being_ignored = whole_var not in blacklist
-        ignoring_variable_by_template = len(whitelisted) > 0
-        ignoring_all_by_template = blacklist.get(ANY_VARIABLE, [])
-        if not_being_ignored or ignoring_variable_by_template:
+        has_per_template_ignores = (len(ignored_templates_for_this_var) > 0) or (
+            len(ignored_templates_for_any_var) > 0
+        )
+        if not_being_ignored or has_per_template_ignores:
             try:
                 (
                     template_name,
@@ -489,19 +491,41 @@ def new_resolve_lookup(self, context):
             if context.template.engine.debug and exc_info:
                 exc_info["message"] = msg
                 exc.template_debug = exc_info
-            if ANY_TEMPLATE in whitelisted:
-                logger.debug("Ignoring '%s' globally via *", whole_var)
-            elif template_name in whitelisted:
+            if ANY_TEMPLATE in ignored_templates_for_this_var:
                 logger.debug(
-                    "Ignoring '%s' for template '%s'", whole_var, template_name
+                    "Ignoring '%s' globally via * (of %s)",
+                    whole_var,
+                    ignored_templates_for_this_var,
                 )
-            elif template_name in ignoring_all_by_template:
+            elif template_name in ignored_templates_for_this_var:
                 logger.debug(
-                    "Ignoring '%s' via * for template '%s'", whole_var, template_name
+                    "Ignoring '%s' for template '%s' (of %s)",
+                    whole_var,
+                    template_name,
+                    ignored_templates_for_this_var,
                 )
-            elif any(x in whitelisted for x in all_template_names):
+            elif any(x in ignored_templates_for_this_var for x in all_template_names):
                 logger.debug(
-                    "Ignoring '%s' for templates %r", whole_var, all_template_names
+                    "Ignoring '%s' for template '%s' (of %s)",
+                    whole_var,
+                    template_name,
+                    all_template_names,
+                )
+            elif any(x in ignored_templates_for_any_var for x in all_template_names):
+                logger.debug(
+                    "Ignoring '%s' for template '%s' (of %s) due to * over %s",
+                    whole_var,
+                    template_name,
+                    all_template_names,
+                    ignored_templates_for_any_var,
+                )
+            elif template_name in ignored_templates_for_any_var:
+                logger.debug(
+                    "Ignoring '%s' for template '%s' (of %s) due to * over %s",
+                    whole_var,
+                    template_name,
+                    all_template_names,
+                    ignored_templates_for_any_var,
                 )
             else:
                 raise exc
@@ -1671,8 +1695,7 @@ if __name__ == "__main__":
                     </form>
                     """
                 )
-                with self.assertRaises(self.MissingVariable):
-                    t.render(CTX({"my_form": MyForm(data=None, files=None)}))
+                t.render(CTX({"my_form": MyForm(data=None, files=None)}))
 
     class InternalVariableBlacklistTestCase(SimpleTestCase):  # type: ignore
         def test_im_not_an_idiot(self):
