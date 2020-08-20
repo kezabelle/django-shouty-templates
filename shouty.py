@@ -350,6 +350,12 @@ def create_exception_with_template_debug(context, part, exception_cls):
             "=",
             "}",
         )
+        # Just skip every subsequent check if the token/variable/part isn't anywhere in the template
+        # which is sometimes the case if walking backwards through a series of templates, and sometimes
+        # (eg: in crispy_forms) the variable never exists in any template file (html5_required) so we can
+        # short circuit here.
+        if part not in src:
+            continue
 
         for match in tag_re.finditer(src):
             match_start, match_end = match.span()
