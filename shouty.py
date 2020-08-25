@@ -806,6 +806,15 @@ default_app_config = "shouty.Shout"
 
 if __name__ == "__main__":
     import sys, os
+    try:
+        import coverage
+    except ImportError:
+        sys.stdout.write("coverage not installed\n")
+        cov = None
+    else:
+        sys.stdout.write("using coverage\n")
+        cov = coverage.Coverage(include=['shouty.py'], branch=True, check_preimported=True)
+        cov.start()
     from unittest import skipIf
     from contextlib import contextmanager
     from django.test import TestCase, SimpleTestCase, override_settings
@@ -1804,3 +1813,8 @@ if __name__ == "__main__":
         )
 
     failures = test_runner.run_tests(test_labels=(), extra_tests=test_cases_to_run,)
+    if cov is not None:
+        sys.stdout.write("Writing coverage report\n")
+        cov.stop()
+        cov.save()
+        cov.html_report()
