@@ -970,6 +970,12 @@ if __name__ == "__main__":
                             found=found, expected=expected, others=other_keys,
                         )
                     )
+            else:
+                self.fail(  # type: ignore
+                    "No exception was raised. Expected {!s} matching: {!s}...".format(
+                        exception_type.__name__, exception_repr.splitlines()[0]
+                    )
+                )
 
     class BasicUsageTestCase(CustomAssertions, TestCase):  # type: ignore
         def setUp(self):
