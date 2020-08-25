@@ -4,6 +4,11 @@ django-shouty-templates
 :author: Keryn Knight
 :version: 0.1.6
 
+Brief
+-----
+
+This app applies a monkeypatch which forces Django's template language to error
+**very loudly** about variables which are *used* in a template but *don't exist* in the context.
 
 Rationale
 ---------
@@ -23,20 +28,25 @@ everything works fine, until any of the following happens:
 - ``is_cake_chef`` is renamed ``is_pastry_king``
 
 If those happen, the template will either silently display nothing, or will
-display the label incorrectly.
-
-This app applies a monkeypatch which forces Django's template language to error
-far more loudly about invalid assumptions.
+display the label incorrectly. This monkeypatch attempts to fix that.
 
 Specifically:
 
-- ``chef`` would raise an exception if the variable were called ``sous_chef``
-- ``chef.can_add_cakes`` would raise an exception if ``can_add_cakes`` was no longer a valid attribute/property/method of ``chef``
-- ``chef.is_cake_chef`` would raise an exception for the same reasons.
+- ``chef`` will raise an exception if the variable were called ``sous_chef``
+- ``chef.can_add_cakes`` will raise an exception if ``can_add_cakes`` was no longer a valid attribute/property/method of ``chef``
+- ``chef.is_cake_chef`` will raise an exception for the same reasons.
 
 Thus you can refactor somewhat more freely, knowing that if the template renders
 it's OK. It ain't compile time safety, but it's better than silently swallowing
 errors because you forgot something!
+
+The exception itself would look something like::
+
+    Token 'chef' of 'chef.can_add_cakes' in template 'my/cool/template.html' does not resolve.
+    Possibly you meant to use 'sous_chef'.
+    You may silence this globally by adding 'chef.can_add_cakes' to the settings.SHOUTY_VARIABLE_BLACKLIST iterable.
+    You may silence this occurance only by adding 'my/cool/template.html' to the 'chef.can_add_cakes' key to the settings.SHOUTY_VARIABLE_BLACKLIST iterable.
+
 
 Setup
 -----
@@ -100,7 +110,7 @@ settings.SHOUTY_URL_BLACKLIST
 +++++++++++++++++++++++++++++
 
 A ``tuple`` of ``2-tuple`` to prevent certain URLs and their output variables f
-rom shouting at you loudly. Useful forexisting projects or third-party apps which are less strict.
+rom shouting at you loudly. Useful for existing projects or third-party apps which are less strict.
 
 By way of example, ``{% url "myurl" as my_var %}`` may be suppressed with::
 
@@ -108,13 +118,13 @@ By way of example, ``{% url "myurl" as my_var %}`` may be suppressed with::
         ('myurl', 'my_var'),
     )
 
-which would still let ``{% url "myurl as "my_other_var %}`` raise an exception.
+which would still let ``{% url "myurl" as "my_other_var" %}`` raise an exception.
 
 Default configuration
 ^^^^^^^^^^^^^^^^^^^^^
 
-There's a hard-coded blacklist of variables and URLs to make sure the Django admin and
-django-debug-toolbar work.
+There's a hard-coded blacklist of variables and URLs to make sure the Django admin (+ admindocs),
+django-debug-toolbar, django-pipeline, django-admin-honeypot, djangorestframework, etc all work.
 
 Tests
 -----
