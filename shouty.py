@@ -1306,6 +1306,31 @@ if __name__ == "__main__":
             ):
                 t.render(CTX({"subtemplate": st}))
 
+        def test_how_default_filters_work(self):
+            # type: () -> None
+            """
+            The `default` and `default_if_none` filters won't allow you to silence
+            the exception, because MissingVariable is a TemplateSyntaxError
+            rather than a VariableDoesNotExist, so the FilterExpression never gets
+            to run over it's possibilities.
+            Which is probably correct really, but also possibly annoyingly strict.
+            """
+            t = TMPL(
+                """
+                this works: {{ a }}
+                this does not work: {{ doesnt_exist|default:"" }}
+                """
+            )
+            with self.assertRaisesWithTemplateDebug(
+                self.MissingVariable,
+                "Variable 'doesnt_exist' in template '<unknown source>' does not resolve.\n"
+                "Possibly you meant to use 'doesntexist'.\n"
+                "You may silence this globally by adding 'doesnt_exist' to the settings.SHOUTY_VARIABLE_BLACKLIST iterable.",
+                {"line": 3, "start": 76, "end": 88, "during": "doesnt_exist"},
+            ):
+                t.render(CTX({"a": 1, "doesntexist": 2}))
+
+
     class UrlTestCase(CustomAssertions, SimpleTestCase):  # type: ignore
         def setUp(self):
             # type: () -> None
