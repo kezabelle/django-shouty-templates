@@ -159,6 +159,8 @@ VARIABLE_BLACKLIST = {
     "request.path": ('admin/app_list.html',),
     # In Django 3.1+ this has turned up...
     "show_changelinks": ('admin/app_list.html',),
+    "is_nav_sidebar_enabled": ("admin/base_site.html",),
+
 }  # type: Dict[str, Tuple[Text,...]]
 
 IF_VARIABLE_BLACKLIST = {
