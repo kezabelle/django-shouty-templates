@@ -940,6 +940,15 @@ if __name__ == "__main__":
             self.engine.debug = True
 
     class CustomAssertions(object):
+        def assertStatusCode(self, resp, value):
+            # type: (Any, int) -> None
+            if resp.status_code != value:
+                self.fail(
+                    "Expected status code {}, response had code {}".format(
+                        value, resp.status_code
+                    )
+                )
+
         @contextmanager
         def assertRaisesWithTemplateDebug(
             self, exception_type, exception_repr, debug_data
@@ -1556,7 +1565,7 @@ if __name__ == "__main__":
             ):
                 t.render(CTX({"chef": Chef()}))
 
-    class CommonAppsTestCase(TestCase):  # type: ignore
+    class CommonAppsTestCase(CustomAssertions, TestCase):  # type: ignore
         def setUp(self):
             # type: () -> None
             from shouty import MissingVariable
@@ -1567,15 +1576,6 @@ if __name__ == "__main__":
                 username="admin", email="admin@admin.admin", password="admin"
             )
             self.client.force_login(self.user)
-
-        def assertStatusCode(self, resp, value):
-            # type: (Any, int) -> None
-            if resp.status_code != value:
-                self.fail(
-                    "Expected status code {}, response had code {}".format(
-                        value, resp.status_code
-                    )
-                )
 
         def test_admin_login_page_without_being_logged_in(self):
             # type: () -> None
@@ -1641,7 +1641,7 @@ if __name__ == "__main__":
                 response = self.client.get("/favicon.ico", follow=False)
                 self.assertStatusCode(response, 404)
 
-    class AdminHoneypotTestCase(TestCase):  # type: ignore
+    class AdminHoneypotTestCase(CustomAssertions, TestCase):  # type: ignore
         def setUp(self):
             # type: () -> None
             from shouty import MissingVariable
