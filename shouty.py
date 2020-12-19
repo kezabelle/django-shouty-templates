@@ -821,7 +821,9 @@ if __name__ == "__main__":
     from contextlib import contextmanager
     from django.test import TestCase, SimpleTestCase, override_settings
     from django.test.runner import DiscoverRunner
-    import django
+    from django.views.debug import ExceptionReporter
+    from django.test.client import RequestFactory
+    from django import setup as django_setup, VERSION as DJANGO_VERSION
     from django.conf import settings as test_settings
     from django.utils.functional import SimpleLazyObject
 
@@ -829,7 +831,7 @@ if __name__ == "__main__":
     try:
         import admin_honeypot
 
-        if django.VERSION[0:2] > (1, 9):
+        if DJANGO_VERSION[0:2] > (1, 9):
             EXTRA_INSTALLED_APPS += ("admin_honeypot",)
     except ImportError:
         pass
@@ -857,7 +859,7 @@ if __name__ == "__main__":
         )
         return patterns
 
-    if django.VERSION[0:2] <= (1, 9):
+    if DJANGO_VERSION[0:2] <= (1, 9):
         version_specific_settings = {
             "MIDDLEWARE_CLASSES": [
                 "django.contrib.sessions.middleware.SessionMiddleware",
@@ -930,7 +932,7 @@ if __name__ == "__main__":
         },
         **version_specific_settings
     )
-    django.setup()
+    django_setup()
     from django.template import Template, Context as CTX
     from django.forms import IntegerField
     from django.template.loader import render_to_string
@@ -960,9 +962,12 @@ if __name__ == "__main__":
                 yield
             except exception_type as exc:
                 self.assertIn(str(exception_repr), str(exc))  # type: ignore
-                if not hasattr(exc, "template_debug") or exc.template_debug == {}:  # type: ignore
+                req = RequestFactory().get('/')
+                reporter = ExceptionReporter(request=req, exc_type=exception_type, exc_value=exc, tb=None, is_email=True)
+                traceback_data = reporter.get_traceback_data()
+                template_debug = traceback_data.get('template_info', {})  # type: Dict[Text, Any]
+                if template_debug == {}:  # type: ignore
                     self.fail("Missing template_debug attribute from {}".format(exc))  # type: ignore
-                template_debug = exc.template_debug  # type: ignore
                 if not debug_data:
                     self.fail(  # type: ignore
                         "No data provided to check against {}".format(template_debug)
@@ -1628,7 +1633,7 @@ if __name__ == "__main__":
             }
             for url in urls:
                 with self.subTest(url=url):
-                    if django.VERSION[0:2] <= (1, 9) and url in dj19_skips:
+                    if DJANGO_VERSION[0:2] <= (1, 9) and url in dj19_skips:
                         self.skipTest("Django 1.9 doesn't support URL: {}".format(url))
                     response = self.client.get(url, follow=False)
                     self.assertStatusCode(response, 200)
