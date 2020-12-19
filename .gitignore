@@ -7,3 +7,5 @@ dist
 build/*
 .direnv/*
 .envrc
+.nox/*
+.tox/*
