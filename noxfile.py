@@ -1,5 +1,8 @@
+import os
+import tempfile
 import nox
 
+nox.options.envdir = os.path.join(tempfile.gettempdir(), 'nox_venvs')
 
 @nox.session()
 def python3_django111(session):
