@@ -160,7 +160,13 @@ VARIABLE_BLACKLIST = {
     # In Django 3.1+ this has turned up...
     "show_changelinks": ('admin/app_list.html',),
     "is_nav_sidebar_enabled": ("admin/base_site.html",),
-
+    # These can occur in the technical 500 page.
+    "template_info.name": (UNKNOWN_SOURCE,),
+    "template_info.line": (UNKNOWN_SOURCE,),
+    "template_info.top": (UNKNOWN_SOURCE,),
+    "template_info.bottom": (UNKNOWN_SOURCE,),
+    "template_info.total": (UNKNOWN_SOURCE,),
+    "template_info.source_lines": (UNKNOWN_SOURCE,),
 }  # type: Dict[str, Tuple[Text,...]]
 
 IF_VARIABLE_BLACKLIST = {
