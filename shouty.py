@@ -573,8 +573,33 @@ def new_if_render(self, context):
     {% if x and y %} will error on y if it is not in the context.
     {% if x or y and z and 1 == 2 %} would error on z if it's not in the context, regardless of evaluation result.
     """
-
     __traceback_hide__ = settings.DEBUG
+    # Attempt to handle the case where there's an {% if %} followed by an {% elif %} but no {% else %}
+    # Note to self: I always have access to the top of the node (self.token), so possibly can refactor
+    # some other places to parse less?
+    if (
+        len(self.conditions_nodelists) > 1
+        and self.conditions_nodelists[-1][0] is not None
+    ):
+        try:
+            (
+                template_name,
+                exc_info,
+                all_template_names,
+            ) = create_exception_with_template_debug(context, self.token.contents, MissingVariable)
+        except Exception as e2:
+            logger.warning("failed to create template_debug information", exc_info=e2)
+            # In case my code is terrible, and raises an exception, let's
+            # just carry on and let Django try for itself to set up relevant
+            # debug info
+            template_name = UNKNOWN_SOURCE
+            exc_info = {}
+        msg = "No `else` branch found for `{ifnode}` + `elif ...` in {template}".format(ifnode=self.token.contents, template=template_name)
+        exc = MissingVariable(msg)
+        if context.template.engine.debug and exc_info is not None:
+            exc_info["message"] = msg
+            exc.template_debug = exc_info
+            raise exc
     result = old_if_render(self, context)
     if result == "":
         conditions_seen = set()  # type: Set[TemplateLiteral]
