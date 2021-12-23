@@ -913,6 +913,7 @@ if __name__ == "__main__":
             ]
         }
     test_settings.configure(
+        SECRET_KEY="test-test-test-test-test-test-test-test-test-test-test-test",
         DATABASES={
             "default": {"ENGINE": "django.db.backends.sqlite3", "NAME": ":memory:"}
         },
