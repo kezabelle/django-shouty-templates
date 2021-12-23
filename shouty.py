@@ -246,6 +246,13 @@ IF_VARIABLE_BLACKLIST = {
     "defer": ("pipeline/js.html",),
 }  # type: Dict[str, Tuple[Text,...]]
 
+IF_ELSE_BLACKLIST = {
+    # Django admin
+    'if model.admin_url and show_changelinks': (
+        'admin/app_list.html',
+    ),
+}
+
 
 def variable_blacklist():
     # type: () -> Dict[Text, List[Text]]
@@ -254,7 +261,12 @@ def variable_blacklist():
     for var, templates in VARIABLE_BLACKLIST.items():
         variables_by_template.setdefault(var, [])
         variables_by_template[var].extend(templates)
+    # Is compounding the IF specific checks with the normal checks silencing
+    # anything incorrectly, I wonder? ...
     for var, templates in IF_VARIABLE_BLACKLIST.items():
+        variables_by_template.setdefault(var, [])
+        variables_by_template[var].extend(templates)
+    for var, templates in IF_ELSE_BLACKLIST.items():
         variables_by_template.setdefault(var, [])
         variables_by_template[var].extend(templates)
     user_blacklist = getattr(settings, "SHOUTY_VARIABLE_BLACKLIST", ())
@@ -587,12 +599,13 @@ def new_if_render(self, context):
         len(self.conditions_nodelists) > 1
         and self.conditions_nodelists[-1][0] is not None
     ):
+        whole_var = self.token.contents
         try:
             (
                 template_name,
                 exc_info,
                 all_template_names,
-            ) = create_exception_with_template_debug(context, self.token.contents, MissingVariable)
+            ) = create_exception_with_template_debug(context, whole_var, MissingVariable)
         except Exception as e2:
             logger.warning("failed to create template_debug information", exc_info=e2)
             # In case my code is terrible, and raises an exception, let's
@@ -600,12 +613,58 @@ def new_if_render(self, context):
             # debug info
             template_name = UNKNOWN_SOURCE
             exc_info = {}
-        msg = "No `else` branch found for `{ifnode}` + `elif ...` in {template}".format(ifnode=self.token.contents, template=template_name)
+        msg = "No `else` branch found for `{ifnode}` + `elif ...` in {template}".format(ifnode=whole_var, template=template_name)
         exc = MissingVariable(msg)
-        if context.template.engine.debug and exc_info is not None:
-            exc_info["message"] = msg
-            exc.template_debug = exc_info
-            raise exc
+
+        if self.token is not None and self.token.contents:
+            blacklist = variable_blacklist()
+            ignored_templates_for_this_var = blacklist.get(whole_var, [])
+            ignored_templates_for_any_var = blacklist.get(ANY_VARIABLE, [])
+            not_being_ignored = whole_var not in blacklist
+            has_per_template_ignores = (len(ignored_templates_for_this_var) > 0) or (
+                    len(ignored_templates_for_any_var) > 0
+            )
+            if not_being_ignored or has_per_template_ignores:
+                if ANY_TEMPLATE in ignored_templates_for_this_var:
+                    logger.debug(
+                        "Ignoring '%s' globally via * (of %s)",
+                        whole_var,
+                        ignored_templates_for_this_var,
+                    )
+                elif template_name in ignored_templates_for_this_var:
+                    logger.debug(
+                        "Ignoring '%s' for template '%s' (of %s)",
+                        whole_var,
+                        template_name,
+                        ignored_templates_for_this_var,
+                    )
+                elif any(x in ignored_templates_for_this_var for x in all_template_names):
+                    logger.debug(
+                        "Ignoring '%s' for template '%s' (of %s)",
+                        whole_var,
+                        template_name,
+                        all_template_names,
+                    )
+                elif any(x in ignored_templates_for_any_var for x in all_template_names):
+                    logger.debug(
+                        "Ignoring '%s' for template '%s' (of %s) due to * over %s",
+                        whole_var,
+                        template_name,
+                        all_template_names,
+                        ignored_templates_for_any_var,
+                    )
+                elif template_name in ignored_templates_for_any_var:
+                    logger.debug(
+                        "Ignoring '%s' for template '%s' (of %s) due to * over %s",
+                        whole_var,
+                        template_name,
+                        all_template_names,
+                        ignored_templates_for_any_var,
+                    )
+            elif context.template.engine.debug and exc_info is not None:
+                exc_info["message"] = msg
+                exc.template_debug = exc_info
+                raise exc
     result = old_if_render(self, context)
     if result == "":
         conditions_seen = set()  # type: Set[TemplateLiteral]
