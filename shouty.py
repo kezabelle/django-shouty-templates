@@ -115,6 +115,9 @@ VARIABLE_BLACKLIST = {
     "query.trans_status": ("debug_toolbar/panels/sql.html",),
     # Django admin
     # TODO: Get fixed upstream?
+    "subtitle": (
+        "admin/base_site.html",
+    ),
     "model.add_url": (
         "admin/index.html",
         "admin/app_index.html",
