@@ -19,10 +19,13 @@ from difflib import get_close_matches
 
 from django.apps import AppConfig
 from django.conf import settings
+from django.utils.text import slugify
 from django.template import Context
 from django.template.base import (
     Variable,
+    VariableNode,
     VariableDoesNotExist,
+    FilterExpression,
     UNKNOWN_SOURCE,
     Template,
     Origin,
@@ -90,6 +93,8 @@ class MissingVariable(TemplateSyntaxError):  # type: ignore
 
 
 old_resolve_lookup = Variable._resolve_lookup
+old_variablenode_render = VariableNode.render
+old_filterexpression_resolve = FilterExpression.resolve
 old_url_render = URLNode.render
 old_if_render = IfNode.render
 
@@ -460,11 +465,14 @@ def create_exception_with_template_debug(context, part):
             token = src[match_start:match_end]
             if part not in token:
                 continue
-
+            all_parts = [p.strip() for p in token.split(' ') if p.strip()]
             # We need to make sure that the {# and #} appear to the left & right of our part
-            if VARIABLE_TAG_END not in token and BLOCK_TAG_END not in token:
+            if token[0:2] == COMMENT_TAG_START and token[-2:] == COMMENT_TAG_END:
                 continue
-            elif token[0:2] == COMMENT_TAG_START and token[-2:] == COMMENT_TAG_END:
+            # it's a {% block %} tag with the same _name_ as the variable...
+            elif token[0:2] == BLOCK_TAG_START and token[-2:] == BLOCK_TAG_END and (all_parts[0] == 'block' or all_parts[0] == part):
+                continue
+            elif VARIABLE_TAG_END not in token or BLOCK_TAG_END not in token:
                 continue
 
             # Where does the line/token start in the original, newlines ridden source?
@@ -497,6 +505,32 @@ def create_exception_with_template_debug(context, part):
     return UNKNOWN_SOURCE, {}, template_names
 
 
+def new_variablenode_setattr(self, name, value):
+    # type: (VariableNode, str, Any) -> Any
+    __traceback_hide__ = settings.DEBUG
+    # Pass down the VariableNode's underlying Token origin, pushed in via extend_nodelist
+    # This has to be done via __setattr__ because the Token + Origin aren't assigned
+    # until later, BUT I need to pass it down BEFORE the render method is called,
+    # because the Variable might get used in an {% if %} or whatever, rather than
+    # ever being output.
+    if name == 'origin':
+        if getattr(self.filter_expression, 'origin', None) is None:
+            self.filter_expression.origin = value
+            # We don't need to check if the .var is a Variable, I don't think,
+            # because if it's not it'll still be a SafeString instance?
+            if self.filter_expression.var is not None and getattr(self.filter_expression.var, 'origin', None) is None:
+                self.filter_expression.var.origin = value
+    return super(VariableNode, self).__setattr__(name, value)
+
+# def new_filterexpression_resolve(self, context, ignore_failures=False):
+#     # type: (FilterExpression, Any, bool) -> Any
+#     __traceback_hide__ = settings.DEBUG
+#     # Pass down the FilterExpression's underlying Token origin, pushed in via the patched
+#     # VariableNode which itself is pushed in via extend_nodelist
+#     if hasattr(self, 'origin') and isinstance(self.var, Variable) and getattr(self.var, 'origin', None) is None:
+#         self.var.origin = self.origin
+#     return old_filterexpression_resolve(self, context, ignore_failures=ignore_failures)
+
 def new_resolve_lookup(self, context):
     # type: (Variable, Any) -> Any
     """
@@ -505,6 +539,8 @@ def new_resolve_lookup(self, context):
     instead re-format it and re-raise it as another, uncaught exception type.
     """
     __traceback_hide__ = settings.DEBUG
+    # if hasattr(self, 'origin'):
+    #     print(self.origin)
     try:
         return old_resolve_lookup(self, context)
     except VariableDoesNotExist as e:
@@ -798,6 +834,16 @@ def patch(invalid_variables, invalid_urls):
         if patched_var is False:
             Variable._resolve_lookup = new_resolve_lookup
             Variable._shouty = True
+
+        patched_varnode = getattr(VariableNode, "_shouty", False)
+        if patched_varnode is False:
+            VariableNode.__setattr__ = new_variablenode_setattr
+            VariableNode._shouty = True
+
+        # patched_fe = getattr(FilterExpression, "_shouty", False)
+        # if patched_fe is False:
+        #     FilterExpression.resolve = new_filterexpression_resolve
+        #     FilterExpression._shouty = True
 
         patched_if = getattr(IfNode, "_shouty", False)
         if patched_if is False:
