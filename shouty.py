@@ -626,10 +626,10 @@ def new_if_render(self, context):
     {% if x or y and z and 1 == 2 %} would error on z if it's not in the context, regardless of evaluation result.
     """
     __traceback_hide__ = settings.DEBUG
+    whole_var = self.token.contents
     # Attempt to handle the case where there's an {% if %} followed by an {% elif %} but no {% else %}
     # Note to self: I always have access to the top of the node (self.token), so possibly can refactor
     # some other places to parse less?
-    whole_var = self.token.contents
     if (
         len(self.conditions_nodelists) > 1
         and self.conditions_nodelists[-1][0] is not None
@@ -684,29 +684,21 @@ def new_if_render(self, context):
     for index, condition_nodelist in enumerate(self.conditions_nodelists, start=1):
         condition, nodelist = condition_nodelist
 
-        # Patch the evaluation of the condition to track if/when
-        # it happens during original_if_render
-        if getattr(nodelist, "_shouty", False) is False:
-            original_nodelist_render = nodelist.render
-
-            def new_nodelist_render(_self, _context):
-                _self._evaled = True
-                return original_nodelist_render(_context)
-
-            nodelist._shouty = True
-            nodelist.render = new_nodelist_render.__get__(nodelist)
-
         if condition is not None:
+
+            # Patch the evaluation of the condition to track if/when
+            # it happens during original_if_render
+            if getattr(condition, "_shouty", False) is False:
+                original_condition_eval = condition.eval
+                def new_condition_eval(_self, _context):
+                    _self._evaled = True
+                    return original_condition_eval(_context)
+                condition._shouty = True
+                condition._evaled = False
+                condition.eval = new_condition_eval.__get__(condition)
+
             for _cond in extract_first_second_from_branch(condition):
                 if _cond not in conditions_seen:
-
-                    # if getattr(_cond, "_shouty", False) is False:
-                    #     original_eval = _cond.eval
-                    #     def patched_eval(_self, _context):
-                    #         _self._evaled = True
-                    #         return original_eval(_context)
-                    #     _cond._shouty = True
-                    #     _cond.eval = patched_eval.__get__(_cond)
 
                     conditions.append(_cond)
                     conditions_seen.add(_cond)
@@ -716,9 +708,9 @@ def new_if_render(self, context):
 
     # Result may be "" OR, if exhaustive if/elif/else checking is in effect, the
     # {% else %} portion may have returned a fallback value, so we need to inspect
-    # the individual nodelists, and if the last one is an else AND was rendered,
-    # check all the previous conditions...
-    if result == "" or (self.conditions_nodelists[-1][0] is None and getattr(self.conditions_nodelists[-1][1], '_evaled', False) is True):
+    # the individual top level conditions, and if the last one is an else AND
+    # the previous was an elif, check all the previous conditions...
+    if result == "" or self.conditions_nodelists[-1][0] is None:
         for condition in conditions:
             if hasattr(condition, "value") and hasattr(condition.value, "resolve"):
                 try:
@@ -1407,6 +1399,27 @@ if __name__ == "__main__":
             ):
                 t.render(CTX({}))
 
+
+        def test_if_elif_exhaustiveness(self):
+            # type: () -> None
+            t = TMPL(
+                """
+                {% if 1 == 2 %}
+                whee
+                {% elif 2 == 3 %}
+                whoo
+                {% elif x == 4 %}
+                wiggle
+                {% endif %}
+                """
+            )
+            with self.assertRaisesWithTemplateDebug(
+                self.MissingVariable,
+                "No `else` branch found for `if 1 == 2` + `elif ...` in <unknown source>",
+                {"start": 20, "end": 29, "during": "if 1 == 2"},
+            ):
+                t.render(CTX({}))
+
         def test_exception_debug_info(self):
             # type: () -> None
             t = TMPL(
@@ -1422,9 +1435,9 @@ if __name__ == "__main__":
             )
             with self.assertRaisesWithTemplateDebug(
                     self.MissingVariable,
-                    "Variable 'abc' in template '<unknown source>' does not resolve.\n"
-                    "You may silence this globally by adding 'abc' to the settings.SHOUTY_VARIABLE_BLACKLIST iterable.",
-                    {"line": 3, "during": "abc", "name": UNKNOWN_SOURCE},
+                    "Variable 'z' in template '<unknown source>' does not resolve.\n"
+                    "You may silence this globally by adding 'z' to the settings.SHOUTY_VARIABLE_BLACKLIST iterable.",
+                    {"line": 4, "during": "z", "name": UNKNOWN_SOURCE},
             ):
                 t.render(CTX({"x": 1, "y": 1, "def": 2}))
 
