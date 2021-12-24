@@ -1386,12 +1386,13 @@ if __name__ == "__main__":
                 {% endif %}
                 """
             )
-            try:
+            with self.assertRaisesWithTemplateDebug(
+                    self.MissingVariable,
+                    "Variable 'abc' in template '<unknown source>' does not resolve.\n"
+                    "You may silence this globally by adding 'abc' to the settings.SHOUTY_VARIABLE_BLACKLIST iterable.",
+                    {"line": 3, "during": "abc", "name": UNKNOWN_SOURCE},
+            ):
                 t.render(CTX({"x": 1, "y": 1, "def": 2}))
-            except self.MissingVariable as exc:
-                self.assertEqual(exc.template_debug["line"], 3)
-                self.assertEqual(exc.template_debug["name"], UNKNOWN_SOURCE)
-                self.assertEqual(exc.template_debug["during"], "abc")
 
         def test_complex_exception_debug_info(self):
             # type: () -> None
