@@ -82,8 +82,11 @@ class MissingVariable(TemplateSyntaxError):  # type: ignore
     subclass is used to differentiate shouty errors, while still getting the
     same functionality.
     """
-
-    pass
+    def __init__(self, *args, token, template_name, all_template_names):
+        super().__init__(*args)
+        self.token = token
+        self.template_name = template_name
+        self.all_template_names = all_template_names
 
 
 old_resolve_lookup = Variable._resolve_lookup
@@ -251,6 +254,9 @@ IF_ELSE_BLACKLIST = {
     'if model.admin_url and show_changelinks': (
         'admin/app_list.html',
     ),
+    "if not line.fields|length_is:'1'": (
+        "admin/includes/fieldset.html",
+    )
 }
 
 
@@ -261,12 +267,7 @@ def variable_blacklist():
     for var, templates in VARIABLE_BLACKLIST.items():
         variables_by_template.setdefault(var, [])
         variables_by_template[var].extend(templates)
-    # Is compounding the IF specific checks with the normal checks silencing
-    # anything incorrectly, I wonder? ...
     for var, templates in IF_VARIABLE_BLACKLIST.items():
-        variables_by_template.setdefault(var, [])
-        variables_by_template[var].extend(templates)
-    for var, templates in IF_ELSE_BLACKLIST.items():
         variables_by_template.setdefault(var, [])
         variables_by_template[var].extend(templates)
     user_blacklist = getattr(settings, "SHOUTY_VARIABLE_BLACKLIST", ())
@@ -281,8 +282,78 @@ def variable_blacklist():
     return variables_by_template
 
 
-def create_exception_with_template_debug(context, part, exception_cls):
-    # type: (Context, Text, Type[TemplateSyntaxError]) -> Tuple[Text, Dict[Text, Any], List[Text]]
+def if_var_blacklist():
+    # type: () -> Dict[Text, List[Text]]
+    variables_by_template = {}  # type: Dict[Text, List[Text]]
+    # Is compounding the IF specific checks with the normal checks silencing
+    # anything incorrectly, I wonder? ...
+    for var, templates in IF_VARIABLE_BLACKLIST.items():
+        variables_by_template.setdefault(var, [])
+        variables_by_template[var].extend(templates)
+    for var, templates in IF_ELSE_BLACKLIST.items():
+        variables_by_template.setdefault(var, [])
+        variables_by_template[var].extend(templates)
+    user_blacklist = getattr(settings, "SHOUTY_IF_BLACKLIST", ())
+    if hasattr(user_blacklist, "items") and callable(user_blacklist.items):
+        for var, templates in user_blacklist.items():
+            variables_by_template.setdefault(var, [])
+            variables_by_template[var].extend(templates)
+    else:
+        for var in user_blacklist:
+            variables_by_template.setdefault(var, [])
+            variables_by_template[var].append(ANY_TEMPLATE)
+    return variables_by_template
+
+
+def is_silenced(whole_var, template_name, blacklist, all_template_names):
+    ignored_templates_for_this_var = blacklist.get(whole_var, [])
+    ignored_templates_for_any_var = blacklist.get(ANY_VARIABLE, [])
+    if ANY_TEMPLATE in ignored_templates_for_this_var:
+        logger.debug(
+            "Ignoring '%s' globally via * (of %s)",
+            whole_var,
+            ignored_templates_for_this_var,
+        )
+        return True
+    elif template_name in ignored_templates_for_this_var:
+        logger.debug(
+            "Ignoring '%s' for template '%s' (of %s)",
+            whole_var,
+            template_name,
+            ignored_templates_for_this_var,
+        )
+        return True
+    elif any(x in ignored_templates_for_this_var for x in all_template_names):
+        logger.debug(
+            "Ignoring '%s' for template '%s' (of %s)",
+            whole_var,
+            template_name,
+            all_template_names,
+        )
+        return True
+    elif any(x in ignored_templates_for_any_var for x in all_template_names):
+        logger.debug(
+            "Ignoring '%s' for template '%s' (of %s) due to * over %s",
+            whole_var,
+            template_name,
+            all_template_names,
+            ignored_templates_for_any_var,
+        )
+        return True
+    elif template_name in ignored_templates_for_any_var:
+        logger.debug(
+            "Ignoring '%s' for template '%s' (of %s) due to * over %s",
+            whole_var,
+            template_name,
+            all_template_names,
+            ignored_templates_for_any_var,
+        )
+        return True
+    else:
+        return False
+
+def create_exception_with_template_debug(context, part):
+    # type: (Context, Text) -> Tuple[Text, Dict[Text, Any], List[Text]]
     """
     Between Django 2.0 and Django 3.x at least, painting template exceptions
     can do so via the "wrong" template, which highlights nothing.
@@ -412,7 +483,7 @@ def create_exception_with_template_debug(context, part, exception_cls):
                         continue
 
                     exc_info = _template.get_exception_info(
-                        exception_cls("ignored"), faketoken(position=(start, end))
+                        ValueError("ignored"), faketoken(position=(start, end))
                     )  # type: Dict[Text, Any]
                     if _origin.template_name is None:
                         template_name = UNKNOWN_SOURCE
@@ -448,7 +519,7 @@ def new_resolve_lookup(self, context):
         ignored_templates_for_any_var = blacklist.get(ANY_VARIABLE, [])
         not_being_ignored = whole_var not in blacklist
         has_per_template_ignores = (len(ignored_templates_for_this_var) > 0) or (
-            len(ignored_templates_for_any_var) > 0
+                len(ignored_templates_for_any_var) > 0
         )
         if not_being_ignored or has_per_template_ignores:
             try:
@@ -457,8 +528,7 @@ def new_resolve_lookup(self, context):
                     exc_info,
                     all_template_names,
                 ) = create_exception_with_template_debug(
-                    context, whole_var, MissingVariable
-                )
+                    context, whole_var)
             except Exception as e2:
                 logger.warning(
                     "failed to create template_debug information", exc_info=e2
@@ -523,47 +593,11 @@ def new_resolve_lookup(self, context):
                 closest_matches="', '".join(closest),  # type: ignore
                 templates="', '".join(all_template_names),
             )
-            exc = MissingVariable(msg)
+            exc = MissingVariable(msg, token=whole_var, template_name=template_name, all_template_names=all_template_names)
             if context.template.engine.debug and exc_info:
                 exc_info["message"] = msg
                 exc.template_debug = exc_info
-            if ANY_TEMPLATE in ignored_templates_for_this_var:
-                logger.debug(
-                    "Ignoring '%s' globally via * (of %s)",
-                    whole_var,
-                    ignored_templates_for_this_var,
-                )
-            elif template_name in ignored_templates_for_this_var:
-                logger.debug(
-                    "Ignoring '%s' for template '%s' (of %s)",
-                    whole_var,
-                    template_name,
-                    ignored_templates_for_this_var,
-                )
-            elif any(x in ignored_templates_for_this_var for x in all_template_names):
-                logger.debug(
-                    "Ignoring '%s' for template '%s' (of %s)",
-                    whole_var,
-                    template_name,
-                    all_template_names,
-                )
-            elif any(x in ignored_templates_for_any_var for x in all_template_names):
-                logger.debug(
-                    "Ignoring '%s' for template '%s' (of %s) due to * over %s",
-                    whole_var,
-                    template_name,
-                    all_template_names,
-                    ignored_templates_for_any_var,
-                )
-            elif template_name in ignored_templates_for_any_var:
-                logger.debug(
-                    "Ignoring '%s' for template '%s' (of %s) due to * over %s",
-                    whole_var,
-                    template_name,
-                    all_template_names,
-                    ignored_templates_for_any_var,
-                )
-            else:
+            if not is_silenced(whole_var, template_name, blacklist, all_template_names):
                 raise exc
         else:
             # Let the VariableDoesNotExist bubble back up to whereever it's
@@ -595,75 +629,32 @@ def new_if_render(self, context):
     # Attempt to handle the case where there's an {% if %} followed by an {% elif %} but no {% else %}
     # Note to self: I always have access to the top of the node (self.token), so possibly can refactor
     # some other places to parse less?
+    whole_var = self.token.contents
     if (
         len(self.conditions_nodelists) > 1
         and self.conditions_nodelists[-1][0] is not None
     ):
-        whole_var = self.token.contents
         try:
             (
                 template_name,
                 exc_info,
                 all_template_names,
-            ) = create_exception_with_template_debug(context, whole_var, MissingVariable)
+            ) = create_exception_with_template_debug(context, whole_var)
         except Exception as e2:
             logger.warning("failed to create template_debug information", exc_info=e2)
             # In case my code is terrible, and raises an exception, let's
             # just carry on and let Django try for itself to set up relevant
             # debug info
             template_name = UNKNOWN_SOURCE
+            all_template_names = [template_name]
             exc_info = {}
         msg = "No `else` branch found for `{ifnode}` + `elif ...` in {template}".format(ifnode=whole_var, template=template_name)
-        exc = MissingVariable(msg)
+        exc = MissingVariable(msg, token=whole_var, template_name=template_name, all_template_names=all_template_names)
 
-        if self.token is not None and self.token.contents:
-            blacklist = variable_blacklist()
-            ignored_templates_for_this_var = blacklist.get(whole_var, [])
-            ignored_templates_for_any_var = blacklist.get(ANY_VARIABLE, [])
-            not_being_ignored = whole_var not in blacklist
-            has_per_template_ignores = (len(ignored_templates_for_this_var) > 0) or (
-                    len(ignored_templates_for_any_var) > 0
-            )
-            if not_being_ignored or has_per_template_ignores:
-                if ANY_TEMPLATE in ignored_templates_for_this_var:
-                    logger.debug(
-                        "Ignoring '%s' globally via * (of %s)",
-                        whole_var,
-                        ignored_templates_for_this_var,
-                    )
-                elif template_name in ignored_templates_for_this_var:
-                    logger.debug(
-                        "Ignoring '%s' for template '%s' (of %s)",
-                        whole_var,
-                        template_name,
-                        ignored_templates_for_this_var,
-                    )
-                elif any(x in ignored_templates_for_this_var for x in all_template_names):
-                    logger.debug(
-                        "Ignoring '%s' for template '%s' (of %s)",
-                        whole_var,
-                        template_name,
-                        all_template_names,
-                    )
-                elif any(x in ignored_templates_for_any_var for x in all_template_names):
-                    logger.debug(
-                        "Ignoring '%s' for template '%s' (of %s) due to * over %s",
-                        whole_var,
-                        template_name,
-                        all_template_names,
-                        ignored_templates_for_any_var,
-                    )
-                elif template_name in ignored_templates_for_any_var:
-                    logger.debug(
-                        "Ignoring '%s' for template '%s' (of %s) due to * over %s",
-                        whole_var,
-                        template_name,
-                        all_template_names,
-                        ignored_templates_for_any_var,
-                    )
-            elif context.template.engine.debug and exc_info is not None:
-                exc_info["message"] = msg
-                exc.template_debug = exc_info
+        if context.template.engine.debug and exc_info is not None:
+            exc_info["message"] = msg
+            exc.template_debug = exc_info
+            if not is_silenced(whole_var, exc.template_name, if_var_blacklist(), exc.all_template_names):
                 raise exc
     result = old_if_render(self, context)
     if result == "":
@@ -696,7 +687,8 @@ def new_if_render(self, context):
                     condition.value.resolve(context)
                 except Exception as e:
                     if isinstance(e, MissingVariable):
-                        raise
+                        if not is_silenced(e.token, e.template_name, if_var_blacklist(), e.all_template_names):
+                            raise
     return result
 
 
@@ -738,7 +730,7 @@ def new_url_render(self, context):
                     exc_info,
                     all_template_names,
                 ) = create_exception_with_template_debug(
-                    context, outvar, MissingVariable
+                    context, outvar
                 )
             except Exception as e2:
                 logger.warning(
@@ -752,7 +744,7 @@ def new_url_render(self, context):
             msg = "{{% url {token!s} ... as {asvar!s} %}} in template '{template} did not resolve.\nYou may silence this globally by adding {key!r} to settings.SHOUTY_URL_BLACKLIST".format(
                 token=self.view_name, asvar=outvar, key=key, template=template_name,
             )
-            exc = MissingVariable(msg)
+            exc = MissingVariable(msg, token=key, template_name=template_name, all_template_names=all_template_names)
             if context.template.engine.debug and exc_info is not None:
                 exc_info["message"] = msg
                 exc.template_debug = exc_info
@@ -1364,6 +1356,8 @@ if __name__ == "__main__":
                 whoo
                 {% elif x == 4 %}
                 wiggle
+                {% else %}
+                <!-- exhaustive if checking -->
                 {% endif %}
                 """
             )
@@ -1383,6 +1377,8 @@ if __name__ == "__main__":
                 {{ abc }}
                 {% elif y == z %}
                 {{ def }}
+                {% else %}
+                <!-- exhaustive if checking -->
                 {% endif %}
                 """
             )
