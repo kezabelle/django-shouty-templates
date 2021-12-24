@@ -656,31 +656,69 @@ def new_if_render(self, context):
             exc.template_debug = exc_info
             if not is_silenced(whole_var, exc.template_name, if_var_blacklist(), exc.all_template_names):
                 raise exc
+
+    # I need to collect all the conditions from all the nodelists BEFORE calling
+    # the original render method, to allow for peeking at which nodelist was
+    # rendered. When exhaustive {% if %}{% elif %} checking occurs and FORCES
+    # an else condition, that else condition may something other than "", so requires
+    # knowing that the ELSE nodelist was the one which was rendered, whilst
+    # still collecting the individual conditions that made up all the if components
+    # to check which ones failed with a MissingVariable exception rather than just
+    # evaluating falsy...
+    conditions_seen = set()  # type: Set[TemplateLiteral]
+    conditions = []  # type: List[TemplateLiteral]
+
+    def extract_first_second_from_branch(_cond):
+        # type: (Any) -> Iterator[TemplateLiteral]
+        first = getattr(_cond, "first", None)
+        second = getattr(_cond, "second", None)
+        if first is not None and first:
+            for subcond in extract_first_second_from_branch(first):
+                yield subcond
+        if second is not None and second:
+            for subcond in extract_first_second_from_branch(second):
+                yield subcond
+        if first is None and second is None:
+            yield _cond
+
+    for index, condition_nodelist in enumerate(self.conditions_nodelists, start=1):
+        condition, nodelist = condition_nodelist
+
+        # Patch the evaluation of the condition to track if/when
+        # it happens during original_if_render
+        if getattr(nodelist, "_shouty", False) is False:
+            original_nodelist_render = nodelist.render
+
+            def new_nodelist_render(_self, _context):
+                _self._evaled = True
+                return original_nodelist_render(_context)
+
+            nodelist._shouty = True
+            nodelist.render = new_nodelist_render.__get__(nodelist)
+
+        if condition is not None:
+            for _cond in extract_first_second_from_branch(condition):
+                if _cond not in conditions_seen:
+
+                    # if getattr(_cond, "_shouty", False) is False:
+                    #     original_eval = _cond.eval
+                    #     def patched_eval(_self, _context):
+                    #         _self._evaled = True
+                    #         return original_eval(_context)
+                    #     _cond._shouty = True
+                    #     _cond.eval = patched_eval.__get__(_cond)
+
+                    conditions.append(_cond)
+                    conditions_seen.add(_cond)
+
+
     result = old_if_render(self, context)
-    if result == "":
-        conditions_seen = set()  # type: Set[TemplateLiteral]
-        conditions = []  # type: List[TemplateLiteral]
 
-        def extract_first_second_from_branch(_cond):
-            # type: (Any) -> Iterator[TemplateLiteral]
-            first = getattr(_cond, "first", None)
-            second = getattr(_cond, "second", None)
-            if first is not None and first:
-                for subcond in extract_first_second_from_branch(first):
-                    yield subcond
-            if second is not None and second:
-                for subcond in extract_first_second_from_branch(second):
-                    yield subcond
-            if first is None and second is None:
-                yield _cond
-
-        for index, condition_nodelist in enumerate(self.conditions_nodelists, start=1):
-            condition, nodelist = condition_nodelist
-            if condition is not None:
-                for _cond in extract_first_second_from_branch(condition):
-                    if _cond not in conditions_seen:
-                        conditions.append(_cond)
-                        conditions_seen.add(_cond)
+    # Result may be "" OR, if exhaustive if/elif/else checking is in effect, the
+    # {% else %} portion may have returned a fallback value, so we need to inspect
+    # the individual nodelists, and if the last one is an else AND was rendered,
+    # check all the previous conditions...
+    if result == "" or (self.conditions_nodelists[-1][0] is None and getattr(self.conditions_nodelists[-1][1], '_evaled', False) is True):
         for condition in conditions:
             if hasattr(condition, "value") and hasattr(condition.value, "resolve"):
                 try:
