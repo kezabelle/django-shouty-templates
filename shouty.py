@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 from __future__ import absolute_import, unicode_literals
-
+import sys
 import logging
 import re
 from collections import namedtuple
@@ -29,6 +29,7 @@ from django.template.base import (
     UNKNOWN_SOURCE,
     Template,
     Origin,
+    Node,
     VARIABLE_TAG_START,
     VARIABLE_TAG_END,
     BLOCK_TAG_START,
@@ -42,7 +43,7 @@ from django.template.base import (
 )
 from django.template.context import BaseContext
 from django.template.defaulttags import URLNode, IfNode, TemplateLiteral
-from django.template.exceptions import TemplateSyntaxError
+from django.template.exceptions import TemplateSyntaxError, TemplateDoesNotExist
 from django.forms import Form
 
 try:
@@ -93,8 +94,8 @@ class MissingVariable(TemplateSyntaxError):  # type: ignore
 
 
 old_resolve_lookup = Variable._resolve_lookup
-old_variablenode_render = VariableNode.render
-old_filterexpression_resolve = FilterExpression.resolve
+# old_variablenode_render = VariableNode.render
+# old_filterexpression_resolve = FilterExpression.resolve
 old_url_render = URLNode.render
 old_if_render = IfNode.render
 
@@ -357,8 +358,8 @@ def is_silenced(whole_var, template_name, blacklist, all_template_names):
     else:
         return False
 
-def create_exception_with_template_debug(context, part):
-    # type: (Context, Text) -> Tuple[Text, Dict[Text, Any], List[Text]]
+def create_exception_with_template_debug(context, part, node, origin):
+    # type: (Context, Text, Node, Origin) -> Tuple[Text, Dict[Text, Any], List[Text]]
     """
     Between Django 2.0 and Django 3.x at least, painting template exceptions
     can do so via the "wrong" template, which highlights nothing.
@@ -385,6 +386,11 @@ def create_exception_with_template_debug(context, part):
 
     contexts_to_search = []  # type: List[Union[Template, Origin]]
     all_potential_contexts = []  # type: List[Union[Template, Origin]]
+
+    if origin is not None:
+        contexts_to_search.append(origin)
+        all_potential_contexts.append(origin)
+
     render_context = context.render_context
     # Prefer extends origins
     if "extends_context" in render_context and render_context["extends_context"]:
@@ -439,9 +445,22 @@ def create_exception_with_template_debug(context, part):
 
     for parent in contexts_to_search:
         if isinstance(parent, Origin):
-            _template, _origin = context.template.engine.find_template(
-                parent.template_name, skip=None,
-            )
+            # an Origin without a template name would crash deep down in
+            # find_template with
+            # TypeError: join() argument must be str, bytes, or os.PathLike object, not 'NoneType'
+            if parent.template_name:
+                try:
+                    _template, _origin = context.template.engine.find_template(
+                        parent.template_name, skip=None,
+                    )
+                except TemplateDoesNotExist:
+                    # Got an Origin without the Template backing it being findable...
+                    # So just fake one.
+                    _origin = parent
+                    _template = Template('', origin=_origin, name=parent)
+            else:
+                _origin = parent
+                _template = Template('', origin=_origin, name=parent)
         else:
             _template = parent
             _origin = parent.origin
@@ -460,6 +479,12 @@ def create_exception_with_template_debug(context, part):
         if part not in src:
             continue
 
+        # Using a DebugLexer instead of a Lexer, so we have positions.
+        # if node is not None and node.position is not None:
+        #     exc_info = _template.get_exception_info(ValueError("ignored"), node)
+        #     return _template.origin.template_name, exc_info, template_names
+
+
         for match in tag_re.finditer(src):
             match_start, match_end = match.span()
             token = src[match_start:match_end]
@@ -472,8 +497,8 @@ def create_exception_with_template_debug(context, part):
             # it's a {% block %} tag with the same _name_ as the variable...
             elif token[0:2] == BLOCK_TAG_START and token[-2:] == BLOCK_TAG_END and (all_parts[0] == 'block' or all_parts[0] == part):
                 continue
-            elif VARIABLE_TAG_END not in token or BLOCK_TAG_END not in token:
-                continue
+            # Now it must be: NOT a comment, NOT a block or the NAME of a template
+            # tag, so it's probably either {{ myvar }} or {% tagname argument argument myvar %}
 
             # Where does the line/token start in the original, newlines ridden source?
             first_occurance_of_token = src.find(token, match_start - 1)  # type: int
@@ -505,8 +530,30 @@ def create_exception_with_template_debug(context, part):
     return UNKNOWN_SOURCE, {}, template_names
 
 
+def get_nearest_node():
+    parent_frame = sys._getframe()
+    while parent_frame.f_locals:
+        if "self" in parent_frame.f_locals:
+            runner = parent_frame.f_code.co_filename
+            obj = parent_frame.f_locals["self"]
+            if isinstance(obj, Node) and hasattr(obj, 'origin') and hasattr(obj, 'token'):
+                for attr, value in obj.__dict__.items():
+                    try:
+                        value._shouty_token = obj.token
+                    except Exception:
+                        pass
+                    try:
+                        value._shouty_origin = obj.origin
+                    except Exception:
+                        pass
+                return obj
+        parent_frame = parent_frame.f_back
+    return None
+
+
+
 def new_variablenode_setattr(self, name, value):
-    # type: (VariableNode, str, Any) -> Any
+    # type: (Node, str, Any) -> Any
     __traceback_hide__ = settings.DEBUG
     # Pass down the VariableNode's underlying Token origin, pushed in via extend_nodelist
     # This has to be done via __setattr__ because the Token + Origin aren't assigned
@@ -520,6 +567,15 @@ def new_variablenode_setattr(self, name, value):
             # because if it's not it'll still be a SafeString instance?
             if self.filter_expression.var is not None and getattr(self.filter_expression.var, 'origin', None) is None:
                 self.filter_expression.var.origin = value
+        # Can't set .token on a FilterExpression because that's the name it
+        # already uses internally. But by the time .origin is bound, .token on
+        # the VariableNode should already have happened...
+        if getattr(self.filter_expression, '_token', None) is None:
+            self.filter_expression._token = self.token
+            # We don't need to check if the .var is a Variable, I don't think,
+            # because if it's not it'll still be a SafeString instance?
+            if self.filter_expression.var is not None and getattr(self.filter_expression.var, 'token', None) is None:
+                self.filter_expression.var.token = self.token
     return super(VariableNode, self).__setattr__(name, value)
 
 # def new_filterexpression_resolve(self, context, ignore_failures=False):
@@ -541,6 +597,8 @@ def new_resolve_lookup(self, context):
     __traceback_hide__ = settings.DEBUG
     # if hasattr(self, 'origin'):
     #     print(self.origin)
+    token = getattr(self, 'token', None)
+    origin = getattr(self, 'origin', None)
     try:
         return old_resolve_lookup(self, context)
     except VariableDoesNotExist as e:
@@ -563,8 +621,7 @@ def new_resolve_lookup(self, context):
                     template_name,
                     exc_info,
                     all_template_names,
-                ) = create_exception_with_template_debug(
-                    context, whole_var)
+                ) = create_exception_with_template_debug(context, whole_var, token, origin)
             except Exception as e2:
                 logger.warning(
                     "failed to create template_debug information", exc_info=e2
@@ -675,7 +732,7 @@ def new_if_render(self, context):
                 template_name,
                 exc_info,
                 all_template_names,
-            ) = create_exception_with_template_debug(context, whole_var)
+            ) = create_exception_with_template_debug(context, whole_var, self, self.origin)
         except Exception as e2:
             logger.warning("failed to create template_debug information", exc_info=e2)
             # In case my code is terrible, and raises an exception, let's
@@ -684,7 +741,7 @@ def new_if_render(self, context):
             template_name = UNKNOWN_SOURCE
             all_template_names = [template_name]
             exc_info = {}
-        msg = "No `else` branch found for `{ifnode}` + `elif ...` in {template}".format(ifnode=whole_var, template=template_name)
+        msg = "No `else` branch found for `{{% {ifnode} %}}` + `elif ...` in {template}".format(ifnode=whole_var, template=template_name)
         exc = MissingVariable(msg, token=whole_var, template_name=template_name, all_template_names=all_template_names)
 
         if context.template.engine.debug and exc_info is not None:
@@ -796,7 +853,7 @@ def new_url_render(self, context):
                     exc_info,
                     all_template_names,
                 ) = create_exception_with_template_debug(
-                    context, outvar
+                    context, outvar, self, self.origin
                 )
             except Exception as e2:
                 logger.warning(
@@ -1040,6 +1097,7 @@ if __name__ == "__main__":
             ]
         }
     test_settings.configure(
+        DEBUG=True,
         SECRET_KEY="test-test-test-test-test-test-test-test-test-test-test-test",
         DATABASES={
             "default": {"ENGINE": "django.db.backends.sqlite3", "NAME": ":memory:"}
@@ -1109,6 +1167,7 @@ if __name__ == "__main__":
             self.engine.debug = True
 
     class CustomAssertions(object):
+
         def assertStatusCode(self, resp, value):
             # type: (Any, int) -> None
             if resp.status_code != value:
@@ -1174,6 +1233,7 @@ if __name__ == "__main__":
 
             self.MissingVariable = MissingVariable
 
+        @override_settings(DEBUG=True)
         def test_most_basic(self):
             # type: () -> None
             t = TMPL(
@@ -1191,6 +1251,7 @@ if __name__ == "__main__":
             ):
                 t.render(CTX({"a": 1, "be": 2}))
 
+        @override_settings(DEBUG=True)
         def test_nested_tokens_on_dict(self):
             # type: () -> None
             t = TMPL(
@@ -1210,6 +1271,7 @@ if __name__ == "__main__":
             ):
                 t.render(CTX({"a": {"b": {"cd": 1}}}))
 
+        @override_settings(DEBUG=True)
         def test_nested_tokens_on_namedtuple(self):
             # type: () -> None
             t = TMPL(
@@ -1229,6 +1291,7 @@ if __name__ == "__main__":
             ):
                 t.render(CTX({"a": {"b": nt}}))
 
+        @override_settings(DEBUG=True)
         def test_index(self):
             # type: () -> None
             t = TMPL(
@@ -1246,6 +1309,7 @@ if __name__ == "__main__":
             ):
                 t.render(CTX({"a": (1, 2)}))
 
+        @override_settings(DEBUG=True)
         def test_nested_templates(self):
             # type: () -> None
             t = TMPL(
@@ -1268,6 +1332,7 @@ if __name__ == "__main__":
             ):
                 t.render(CTX({"a": 1, "subtemplate": st, "b": 2}))
 
+        @override_settings(DEBUG=True)
         def test_form_possibilities(self):
             # type: () -> None
             t = TMPL(
@@ -1288,6 +1353,7 @@ if __name__ == "__main__":
             ):
                 t.render(CTX({"form": MyForm(data={"example": "1"})}))
 
+        @override_settings(DEBUG=True)
         def test_model_possibilities(self):
             # type: () -> None
             t = TMPL(
@@ -1317,6 +1383,7 @@ if __name__ == "__main__":
             ):
                 t.render(CTX({"obj": example}))
 
+        @override_settings(DEBUG=True)
         def test_model_related_possibilities(self):
             # type: () -> None
             t = TMPL(
@@ -1338,6 +1405,7 @@ if __name__ == "__main__":
             ):
                 t.render(CTX({"obj": user}))
 
+        @override_settings(DEBUG=True)
         def test_for_loop(self):
             # type: () -> None
             t = TMPL(
@@ -1365,6 +1433,7 @@ if __name__ == "__main__":
             ):
                 t.render(CTX({"chef": Chef()}))
 
+        @override_settings(DEBUG=True)
         def test_multiple_variables_in_if_stmt_and_only_some_resolve(self):
             # type: () -> None
             t = TMPL(
@@ -1388,6 +1457,7 @@ if __name__ == "__main__":
             ):
                 t.render(CTX({"chef": Chef()}))
 
+        @override_settings(DEBUG=True)
         def test_many_if_variables1(self):
             # type: () -> None
             t = TMPL(
@@ -1405,6 +1475,7 @@ if __name__ == "__main__":
             ):
                 t.render(CTX({"whooo": 0}))
 
+        @override_settings(DEBUG=True)
         def test_many_if_variables2(self):
             # type: () -> None
             t = TMPL(
@@ -1422,6 +1493,7 @@ if __name__ == "__main__":
             ):
                 t.render(CTX({}))
 
+        @override_settings(DEBUG=True)
         def test_if_elif(self):
             # type: () -> None
             t = TMPL(
@@ -1445,7 +1517,7 @@ if __name__ == "__main__":
             ):
                 t.render(CTX({}))
 
-
+        @override_settings(DEBUG=True)
         def test_if_elif_exhaustiveness(self):
             # type: () -> None
             t = TMPL(
@@ -1461,11 +1533,12 @@ if __name__ == "__main__":
             )
             with self.assertRaisesWithTemplateDebug(
                 self.MissingVariable,
-                "No `else` branch found for `if 1 == 2` + `elif ...` in <unknown source>",
+                "No `else` branch found for `{% if 1 == 2 %}` + `elif ...` in <unknown source>",
                 {"start": 20, "end": 29, "during": "if 1 == 2"},
             ):
                 t.render(CTX({}))
 
+        @override_settings(DEBUG=True)
         def test_exception_debug_info(self):
             # type: () -> None
             t = TMPL(
@@ -1487,6 +1560,7 @@ if __name__ == "__main__":
             ):
                 t.render(CTX({"x": 1, "y": 1, "def": 2}))
 
+        @override_settings(DEBUG=True)
         def test_complex_exception_debug_info(self):
             # type: () -> None
             t = TMPL(
@@ -1513,6 +1587,7 @@ if __name__ == "__main__":
             ):
                 t.render(CTX({"subtemplate": st}))
 
+        @override_settings(DEBUG=True)
         def test_how_default_filters_work(self):
             # type: () -> None
             """
