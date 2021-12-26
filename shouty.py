@@ -273,9 +273,9 @@ def variable_blacklist():
     for var, templates in VARIABLE_BLACKLIST.items():
         variables_by_template.setdefault(var, [])
         variables_by_template[var].extend(templates)
-    for var, templates in IF_VARIABLE_BLACKLIST.items():
-        variables_by_template.setdefault(var, [])
-        variables_by_template[var].extend(templates)
+    # for var, templates in IF_VARIABLE_BLACKLIST.items():
+    #     variables_by_template.setdefault(var, [])
+    #     variables_by_template[var].extend(templates)
     user_blacklist = getattr(settings, "SHOUTY_VARIABLE_BLACKLIST", ())
     if hasattr(user_blacklist, "items") and callable(user_blacklist.items):
         for var, templates in user_blacklist.items():
@@ -495,7 +495,7 @@ def create_exception_with_template_debug(context, part, node, origin):
             if token[0:2] == COMMENT_TAG_START and token[-2:] == COMMENT_TAG_END:
                 continue
             # it's a {% block %} tag with the same _name_ as the variable...
-            elif token[0:2] == BLOCK_TAG_START and token[-2:] == BLOCK_TAG_END and (all_parts[0] == 'block' or all_parts[0] == part):
+            elif token[0:2] == BLOCK_TAG_START and token[-2:] == BLOCK_TAG_END and (all_parts[1] == 'block' or all_parts[1] == part):
                 continue
             # Now it must be: NOT a comment, NOT a block or the NAME of a template
             # tag, so it's probably either {{ myvar }} or {% tagname argument argument myvar %}
@@ -774,6 +774,8 @@ def new_if_render(self, context):
         if first is None and second is None:
             yield _cond
 
+    if_blacklist = if_var_blacklist()
+
     for index, condition_nodelist in enumerate(self.conditions_nodelists, start=1):
         condition, nodelist = condition_nodelist
 
@@ -785,7 +787,13 @@ def new_if_render(self, context):
                 original_condition_eval = condition.eval
                 def new_condition_eval(_self, _context):
                     _self._evaled = True
-                    return original_condition_eval(_context)
+                    try:
+                        return original_condition_eval(_context)
+                    except Exception as e:
+                        if isinstance(e, MissingVariable):
+                            if not is_silenced(e.token, e.template_name, if_blacklist, e.all_template_names):
+                                raise e
+                        return False
                 condition._shouty = True
                 condition._evaled = False
                 condition.eval = new_condition_eval.__get__(condition)
@@ -805,13 +813,19 @@ def new_if_render(self, context):
     # the previous was an elif, check all the previous conditions...
     if result == "" or self.conditions_nodelists[-1][0] is None:
         for condition in conditions:
-            if hasattr(condition, "value") and hasattr(condition.value, "resolve"):
-                try:
-                    condition.value.resolve(context)
-                except Exception as e:
-                    if isinstance(e, MissingVariable):
-                        if not is_silenced(e.token, e.template_name, if_var_blacklist(), e.all_template_names):
-                            raise
+            try:
+                condition.eval(context)
+            except Exception as e:
+                if isinstance(e, MissingVariable):
+                    if not is_silenced(e.token, e.template_name, if_blacklist, e.all_template_names):
+                        raise e
+            # if hasattr(condition, "value") and hasattr(condition.value, "resolve"):
+    #             try:
+    #                 condition.value.resolve(context)
+    #             except Exception as e:
+    #                 if isinstance(e, MissingVariable):
+    #                     if not is_silenced(e.token, e.template_name, if_blacklist, e.all_template_names):
+    #                         raise e
     return result
 
 
