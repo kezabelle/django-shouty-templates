@@ -275,7 +275,7 @@ def if_var_blacklist():
     for var, templates in IF_VARIABLE_BLACKLIST.items():
         variables_by_template.setdefault(var, [])
         variables_by_template[var].extend(templates)
-    user_blacklist = getattr(settings, "SHOUTY_IF_BLACKLIST", ())
+    user_blacklist = getattr(settings, "SHOUTY_VARIABLE_BLACKLIST", ())
     if hasattr(user_blacklist, "items") and callable(user_blacklist.items):
         for var, templates in user_blacklist.items():
             variables_by_template.setdefault(var, [])
@@ -294,7 +294,7 @@ def if_else_blacklist():
     for var, templates in IF_ELSE_BLACKLIST.items():
         variables_by_template.setdefault(var, [])
         variables_by_template[var].extend(templates)
-    user_blacklist = getattr(settings, "SHOUTY_IF_BLACKLIST", ())
+    user_blacklist = getattr(settings, "SHOUTY_VARIABLE_BLACKLIST", ())
     if hasattr(user_blacklist, "items") and callable(user_blacklist.items):
         for var, templates in user_blacklist.items():
             variables_by_template.setdefault(var, [])
