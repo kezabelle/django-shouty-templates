@@ -1,11 +1,12 @@
 # -*- coding: utf-8 -*-
 from __future__ import absolute_import, unicode_literals
-
 import logging
-import re
+import sys
+
 from collections import namedtuple
 
 from django.core import checks
+
 try:
     from django.utils.encoding import force_str as force_text
 except ImportError:
@@ -24,22 +25,15 @@ from django.template.base import (
     Variable,
     VariableDoesNotExist,
     UNKNOWN_SOURCE,
-    Template,
     Origin,
-    VARIABLE_TAG_START,
-    VARIABLE_TAG_END,
-    BLOCK_TAG_START,
-    BLOCK_TAG_END,
-    COMMENT_TAG_START,
-    COMMENT_TAG_END,
-    VARIABLE_ATTRIBUTE_SEPARATOR,
-    FILTER_SEPARATOR,
-    FILTER_ARGUMENT_SEPARATOR,
-    tag_re,
+    Node,
+    Token,
+    NodeList,
+    Template,
 )
 from django.template.context import BaseContext
 from django.template.defaulttags import URLNode, IfNode, TemplateLiteral
-from django.template.exceptions import TemplateSyntaxError
+from django.template.exceptions import TemplateSyntaxError, TemplateDoesNotExist
 from django.forms import Form
 
 try:
@@ -58,7 +52,6 @@ try:
 except ImportError:
     pass
 
-
 __version_info__ = "0.1.6"
 __version__ = "0.1.6"
 version = "0.1.6"
@@ -72,7 +65,6 @@ def get_version():
 
 __all__ = ["MissingVariable", "patch", "Shout", "default_app_config", "get_version"]
 
-
 logger = logging.getLogger(__name__)
 
 
@@ -83,7 +75,11 @@ class MissingVariable(TemplateSyntaxError):  # type: ignore
     same functionality.
     """
 
-    pass
+    def __init__(self, *args, token, template_name, all_template_names):
+        super().__init__(*args)
+        self.token = token
+        self.template_name = template_name
+        self.all_template_names = all_template_names
 
 
 old_resolve_lookup = Variable._resolve_lookup
@@ -93,6 +89,8 @@ old_if_render = IfNode.render
 ANY_TEMPLATE = "*"
 ANY_VARIABLE = "*"
 
+
+# The following values throw an exception when used as {{ var.name }}
 VARIABLE_BLACKLIST = {
     # When trying to render the technical 500 template, it accesses
     # settings.SETTINGS_MODULE, which ordinarily is there. But if using
@@ -115,9 +113,7 @@ VARIABLE_BLACKLIST = {
     "query.trans_status": ("debug_toolbar/panels/sql.html",),
     # Django admin
     # TODO: Get fixed upstream?
-    "subtitle": (
-        "admin/base_site.html",
-    ),
+    "subtitle": ("admin/base_site.html",),
     "model.add_url": (
         "admin/index.html",
         "admin/app_index.html",
@@ -132,9 +128,8 @@ VARIABLE_BLACKLIST = {
     "cl.formset.errors": (
         "admin/change_list.html",
     ),  # Used on the changelist even if there's no formset?
-    "show": (
-        ANY_TEMPLATE,
-    ),  # date_hierarchy for the changelist doesn't actually always return a dictionary ...
+    "show": (ANY_TEMPLATE,),
+    # date_hierarchy for the changelist doesn't actually always return a dictionary ...
     "cl.formset.is_multipart": (
         "admin/change_list.html",
     ),  # Used on the changelist even if there's no formset?
@@ -162,9 +157,9 @@ VARIABLE_BLACKLIST = {
     # In Django 3.1 this ... might be necessary. IDK I can't recall
     # if the request context processor being missing actually causes
     # a system check error for the admin.
-    "request.path": ('admin/app_list.html',),
+    "request.path": ("admin/app_list.html",),
     # In Django 3.1+ this has turned up...
-    "show_changelinks": ('admin/app_list.html',),
+    "show_changelinks": ("admin/app_list.html",),
     "is_nav_sidebar_enabled": ("admin/base_site.html",),
     # These can occur in the technical 500 page.
     "template_info.name": (UNKNOWN_SOURCE,),
@@ -173,8 +168,12 @@ VARIABLE_BLACKLIST = {
     "template_info.bottom": (UNKNOWN_SOURCE,),
     "template_info.total": (UNKNOWN_SOURCE,),
     "template_info.source_lines": (UNKNOWN_SOURCE,),
+    # accessing admindocs views will have this in file admin_doc/view_index.html
+    "view.title": ("admin_doc/view_index.html",),
 }  # type: Dict[str, Tuple[Text,...]]
 
+
+# The following values throw an exception when used in an if like {% if forloop.last and pat.name %}
 IF_VARIABLE_BLACKLIST = {
     # When trying to render the technical 404 template, {% if forloop.last and pat.name %} gets used
     # in file <unknown source>
@@ -182,21 +181,17 @@ IF_VARIABLE_BLACKLIST = {
     # Accessing admindocs index will trigger this: {% if title %}<h1>{{ title }}</h1>{% endif %}
     # in file admin_doc/index.html and every subpage therein...
     "title": (
-        "admin_doc/index.html",
-        "admin_doc/template_tag_index.html",
-        "admin_doc/template_filter_index.html",
-        "admin_doc/model_index.html",
-        "admin_doc/model_detail.html",
-        "admin_doc/view_detail.html",
-        "admin_doc/bookmarklets.html",
-        "admin_doc/missing_docutils.html",
+        "admin/base.html",
+        "admin/base_site.html",
         "pipeline/css.html",
+    ),
+    "subtitle": (
+        "admin/base.html",
+        "admin/base_site.html",
     ),
     # accessing admindocs detailed model information has: {% if field.help_text %} - ...
     # in file admin_doc/model_detail.html
     "field.help_text": ("admin_doc/model_detail.html",),
-    # accessing admindocs views will have this in file admin_doc/view_index.html
-    "view.title": ("admin_doc/view_index.html",),
     # accessing admindocs views detail will have these in file admin_doc/view_detail.html
     "meta.Context": ("admin_doc/view_detail.html",),
     "meta.Templates": ("admin_doc/view_detail.html",),
@@ -246,11 +241,12 @@ IF_VARIABLE_BLACKLIST = {
     "defer": ("pipeline/js.html",),
 }  # type: Dict[str, Tuple[Text,...]]
 
+# The following IfNode contents don't have an else but do have an elif, so
+# need to be silenced.
 IF_ELSE_BLACKLIST = {
     # Django admin
-    'if model.admin_url and show_changelinks': (
-        'admin/app_list.html',
-    ),
+    "if model.admin_url and show_changelinks": ("admin/app_list.html",),
+    "if not line.fields|length_is:'1'": ("admin/includes/fieldset.html",),
 }
 
 
@@ -261,11 +257,26 @@ def variable_blacklist():
     for var, templates in VARIABLE_BLACKLIST.items():
         variables_by_template.setdefault(var, [])
         variables_by_template[var].extend(templates)
-    # Is compounding the IF specific checks with the normal checks silencing
-    # anything incorrectly, I wonder? ...
     for var, templates in IF_VARIABLE_BLACKLIST.items():
         variables_by_template.setdefault(var, [])
         variables_by_template[var].extend(templates)
+    user_blacklist = getattr(settings, "SHOUTY_VARIABLE_BLACKLIST", ())
+    if hasattr(user_blacklist, "items") and callable(user_blacklist.items):
+        for var, templates in user_blacklist.items():
+            variables_by_template.setdefault(var, [])
+            variables_by_template[var].extend(templates)
+    else:
+        for var in user_blacklist:
+            variables_by_template.setdefault(var, [])
+            variables_by_template[var].append(ANY_TEMPLATE)
+    return variables_by_template
+
+
+def if_else_blacklist():
+    # type: () -> Dict[Text, List[Text]]
+    variables_by_template = {}  # type: Dict[Text, List[Text]]
+    # Is compounding the IF specific checks with the normal checks silencing
+    # anything incorrectly, I wonder? ...
     for var, templates in IF_ELSE_BLACKLIST.items():
         variables_by_template.setdefault(var, [])
         variables_by_template[var].extend(templates)
@@ -281,8 +292,56 @@ def variable_blacklist():
     return variables_by_template
 
 
-def create_exception_with_template_debug(context, part, exception_cls):
-    # type: (Context, Text, Type[TemplateSyntaxError]) -> Tuple[Text, Dict[Text, Any], List[Text]]
+def is_silenced(whole_var, template_name, blacklist, all_template_names):
+    ignored_templates_for_this_var = blacklist.get(whole_var, [])
+    ignored_templates_for_any_var = blacklist.get(ANY_VARIABLE, [])
+    if ANY_TEMPLATE in ignored_templates_for_this_var:
+        logger.debug(
+            "Ignoring '%s' globally via * (of %s)",
+            whole_var,
+            ignored_templates_for_this_var,
+        )
+        return True
+    elif template_name in ignored_templates_for_this_var:
+        logger.debug(
+            "Ignoring '%s' for template '%s' (of %s)",
+            whole_var,
+            template_name,
+            ignored_templates_for_this_var,
+        )
+        return True
+    elif any(x in ignored_templates_for_this_var for x in all_template_names):
+        logger.debug(
+            "Ignoring '%s' for template '%s' (of %s)",
+            whole_var,
+            template_name,
+            all_template_names,
+        )
+        return True
+    elif any(x in ignored_templates_for_any_var for x in all_template_names):
+        logger.debug(
+            "Ignoring '%s' for template '%s' (of %s) due to * over %s",
+            whole_var,
+            template_name,
+            all_template_names,
+            ignored_templates_for_any_var,
+        )
+        return True
+    elif template_name in ignored_templates_for_any_var:
+        logger.debug(
+            "Ignoring '%s' for template '%s' (of %s) due to * over %s",
+            whole_var,
+            template_name,
+            all_template_names,
+            ignored_templates_for_any_var,
+        )
+        return True
+    else:
+        return False
+
+
+def create_exception_with_template_debug(context, part, node):
+    # type: (Context, Text, Optional[Node]) -> Tuple[Text, Dict[Text, Any], List[Text]]
     """
     Between Django 2.0 and Django 3.x at least, painting template exceptions
     can do so via the "wrong" template, which highlights nothing.
@@ -309,6 +368,17 @@ def create_exception_with_template_debug(context, part, exception_cls):
 
     contexts_to_search = []  # type: List[Union[Template, Origin]]
     all_potential_contexts = []  # type: List[Union[Template, Origin]]
+
+    token = None  # type: Optional[Token]
+    origin = None  # type: Optional[Origin]
+    if node is not None:
+        token = node.token
+        origin = node.origin
+
+    if origin is not None:
+        contexts_to_search.append(origin)
+        all_potential_contexts.append(origin)
+
     render_context = context.render_context
     # Prefer extends origins
     if "extends_context" in render_context and render_context["extends_context"]:
@@ -340,32 +410,27 @@ def create_exception_with_template_debug(context, part, exception_cls):
 
     assert len(contexts_to_search) <= len(all_potential_contexts)
 
-    # We don't want {{ username }} to be highlighted for an error related to {{ name }}
-    # so we check the previous/next character from the token's match
-    preceeded_by = (
-        VARIABLE_ATTRIBUTE_SEPARATOR,
-        FILTER_SEPARATOR,
-        FILTER_ARGUMENT_SEPARATOR,
-        " ",
-        "=",  # for {% blocktrans with x=y %}
-        "{",
-    )
-    proceeded_by = (
-        VARIABLE_ATTRIBUTE_SEPARATOR,
-        FILTER_SEPARATOR,
-        FILTER_ARGUMENT_SEPARATOR,
-        " ",
-        "=",
-        "}",
-    )
-
     template_names = []  # type: List[Text]
 
     for parent in contexts_to_search:
         if isinstance(parent, Origin):
-            _template, _origin = context.template.engine.find_template(
-                parent.template_name, skip=None,
-            )
+            # an Origin without a template name would crash deep down in
+            # find_template with
+            # TypeError: join() argument must be str, bytes, or os.PathLike object, not 'NoneType'
+            if parent.template_name:
+                try:
+                    _template, _origin = context.template.engine.find_template(
+                        parent.template_name,
+                        skip=None,
+                    )
+                except TemplateDoesNotExist:
+                    # Got an Origin without the Template backing it being findable...
+                    # So just fake one.
+                    _origin = parent
+                    _template = Template("", origin=_origin, name=parent)
+            else:
+                _origin = parent
+                _template = Template("", origin=_origin, name=parent)
         else:
             _template = parent
             _origin = parent.origin
@@ -384,42 +449,20 @@ def create_exception_with_template_debug(context, part, exception_cls):
         if part not in src:
             continue
 
-        for match in tag_re.finditer(src):
-            match_start, match_end = match.span()
-            token = src[match_start:match_end]
-            if part not in token:
-                continue
-
-            # We need to make sure that the {# and #} appear to the left & right of our part
-            if VARIABLE_TAG_END not in token and BLOCK_TAG_END not in token:
-                continue
-            elif token[0:2] == COMMENT_TAG_START and token[-2:] == COMMENT_TAG_END:
-                continue
-
-            # Where does the line/token start in the original, newlines ridden source?
-            first_occurance_of_token = src.find(token, match_start - 1)  # type: int
-            all_occurances_in_token = re.finditer(part, token)
-            for submatch in all_occurances_in_token:
-                submatch_start, submatch_end = submatch.span()
-                subtoken = token[submatch_start:submatch_end]
-                start = src.find(part, first_occurance_of_token + submatch_start)
-
-                if start > -1:
-                    end = start + len(part)
-                    if src[start - 1] not in preceeded_by:
-                        continue
-                    elif src[end] not in proceeded_by:
-                        continue
-
-                    exc_info = _template.get_exception_info(
-                        exception_cls("ignored"), faketoken(position=(start, end))
-                    )  # type: Dict[Text, Any]
-                    if _origin.template_name is None:
-                        template_name = UNKNOWN_SOURCE
-                    else:
-                        template_name = _origin.template_name
-                    del _template, _origin, start, end
-                    return template_name, exc_info, template_names
+        # Using a DebugLexer instead of a Lexer, so we have positions.
+        if token is not None and getattr(token, "position", None) is not None:
+            start = src.find(part, token.position[0])  # type: int
+            if start > -1:
+                end = start + len(part)
+                highlight_part = faketoken(position=(start, end))
+                exc_info = _template.get_exception_info(
+                    ValueError("ignored"), highlight_part
+                )
+                return (
+                    _template.origin.template_name or UNKNOWN_SOURCE,
+                    exc_info,
+                    template_names,
+                )
 
     if UNKNOWN_SOURCE not in template_names:
         template_names.append(UNKNOWN_SOURCE)
@@ -434,6 +477,19 @@ def new_resolve_lookup(self, context):
     instead re-format it and re-raise it as another, uncaught exception type.
     """
     __traceback_hide__ = settings.DEBUG
+    parent_frame = sys._getframe()
+    parent_node = None  # type: Optional[Node]
+    while parent_frame.f_locals:
+        if "self" in parent_frame.f_locals:
+            obj = parent_frame.f_locals["self"]
+            if (
+                isinstance(obj, Node)
+                and hasattr(obj, "origin")
+                and hasattr(obj, "token")
+            ):
+                parent_node = obj
+                break
+        parent_frame = parent_frame.f_back
     try:
         return old_resolve_lookup(self, context)
     except VariableDoesNotExist as e:
@@ -457,7 +513,7 @@ def new_resolve_lookup(self, context):
                     exc_info,
                     all_template_names,
                 ) = create_exception_with_template_debug(
-                    context, whole_var, MissingVariable
+                    context, whole_var, parent_node
                 )
             except Exception as e2:
                 logger.warning(
@@ -511,11 +567,9 @@ def new_resolve_lookup(self, context):
                 msg += "\nPossibly you meant one of: '{closest_matches}'."
             elif closest:
                 msg += "\nPossibly you meant to use '{closest_matches}'."
-            msg += "\nYou may silence this globally by adding '{var}' to the settings.SHOUTY_VARIABLE_BLACKLIST iterable."
-            if len(all_template_names) > 1:
-                msg += "\nYou may silence this occurance only by adding one of '{templates}' to the '{var}' key to the settings.SHOUTY_VARIABLE_BLACKLIST iterable."
-            elif all_template_names and UNKNOWN_SOURCE not in all_template_names:
-                msg += "\nYou may silence this occurance only by adding {template} to the '{var}' key to the settings.SHOUTY_VARIABLE_BLACKLIST iterable."
+            if all_template_names:
+                msg += "\nSilence this occurance only by adding '{var}': ['{template}'] to the settings.SHOUTY_VARIABLE_BLACKLIST dictionary."
+            msg += "\nSilence this globally by adding '{var}': ['*'] to the settings.SHOUTY_VARIABLE_BLACKLIST dictionary."
             msg = msg.format(
                 token=bit,
                 var=whole_var,
@@ -523,53 +577,22 @@ def new_resolve_lookup(self, context):
                 closest_matches="', '".join(closest),  # type: ignore
                 templates="', '".join(all_template_names),
             )
-            exc = MissingVariable(msg)
+            exc = MissingVariable(
+                msg,
+                token=whole_var,
+                template_name=template_name,
+                all_template_names=all_template_names,
+            )
             if context.template.engine.debug and exc_info:
                 exc_info["message"] = msg
                 exc.template_debug = exc_info
-            if ANY_TEMPLATE in ignored_templates_for_this_var:
-                logger.debug(
-                    "Ignoring '%s' globally via * (of %s)",
-                    whole_var,
-                    ignored_templates_for_this_var,
-                )
-            elif template_name in ignored_templates_for_this_var:
-                logger.debug(
-                    "Ignoring '%s' for template '%s' (of %s)",
-                    whole_var,
-                    template_name,
-                    ignored_templates_for_this_var,
-                )
-            elif any(x in ignored_templates_for_this_var for x in all_template_names):
-                logger.debug(
-                    "Ignoring '%s' for template '%s' (of %s)",
-                    whole_var,
-                    template_name,
-                    all_template_names,
-                )
-            elif any(x in ignored_templates_for_any_var for x in all_template_names):
-                logger.debug(
-                    "Ignoring '%s' for template '%s' (of %s) due to * over %s",
-                    whole_var,
-                    template_name,
-                    all_template_names,
-                    ignored_templates_for_any_var,
-                )
-            elif template_name in ignored_templates_for_any_var:
-                logger.debug(
-                    "Ignoring '%s' for template '%s' (of %s) due to * over %s",
-                    whole_var,
-                    template_name,
-                    all_template_names,
-                    ignored_templates_for_any_var,
-                )
-            else:
+            if not is_silenced(whole_var, template_name, blacklist, all_template_names):
                 raise exc
         else:
             # Let the VariableDoesNotExist bubble back up to whereever it's
             # actually suppressed, to avoid having to decide wtf value to
             # return ("", or None?)
-            raise
+            raise e
 
 
 def new_if_render(self, context):
@@ -592,6 +615,7 @@ def new_if_render(self, context):
     {% if x or y and z and 1 == 2 %} would error on z if it's not in the context, regardless of evaluation result.
     """
     __traceback_hide__ = settings.DEBUG
+    whole_var = self.token.contents
     # Attempt to handle the case where there's an {% if %} followed by an {% elif %} but no {% else %}
     # Note to self: I always have access to the top of the node (self.token), so possibly can refactor
     # some other places to parse less?
@@ -599,105 +623,91 @@ def new_if_render(self, context):
         len(self.conditions_nodelists) > 1
         and self.conditions_nodelists[-1][0] is not None
     ):
-        whole_var = self.token.contents
-        try:
-            (
-                template_name,
-                exc_info,
-                all_template_names,
-            ) = create_exception_with_template_debug(context, whole_var, MissingVariable)
-        except Exception as e2:
-            logger.warning("failed to create template_debug information", exc_info=e2)
-            # In case my code is terrible, and raises an exception, let's
-            # just carry on and let Django try for itself to set up relevant
-            # debug info
-            template_name = UNKNOWN_SOURCE
-            exc_info = {}
-        msg = "No `else` branch found for `{ifnode}` + `elif ...` in {template}".format(ifnode=whole_var, template=template_name)
-        exc = MissingVariable(msg)
+        blacklist = if_else_blacklist()
+        ignored_templates_for_this_var = blacklist.get(whole_var, [])
+        ignored_templates_for_any_var = blacklist.get(ANY_VARIABLE, [])
+        not_being_ignored = whole_var not in blacklist
+        has_per_template_ignores = (len(ignored_templates_for_this_var) > 0) or (
+            len(ignored_templates_for_any_var) > 0
+        )
+        if not_being_ignored or has_per_template_ignores:
+            try:
+                (
+                    template_name,
+                    exc_info,
+                    all_template_names,
+                ) = create_exception_with_template_debug(context, whole_var, self)
+            except Exception as e2:
+                logger.warning(
+                    "failed to create template_debug information", exc_info=e2
+                )
+                # In case my code is terrible, and raises an exception, let's
+                # just carry on and let Django try for itself to set up relevant
+                # debug info
+                template_name = UNKNOWN_SOURCE
+                all_template_names = [template_name]
+                exc_info = {}
 
-        if self.token is not None and self.token.contents:
-            blacklist = variable_blacklist()
-            ignored_templates_for_this_var = blacklist.get(whole_var, [])
-            ignored_templates_for_any_var = blacklist.get(ANY_VARIABLE, [])
-            not_being_ignored = whole_var not in blacklist
-            has_per_template_ignores = (len(ignored_templates_for_this_var) > 0) or (
-                    len(ignored_templates_for_any_var) > 0
-            )
-            if not_being_ignored or has_per_template_ignores:
-                if ANY_TEMPLATE in ignored_templates_for_this_var:
-                    logger.debug(
-                        "Ignoring '%s' globally via * (of %s)",
-                        whole_var,
-                        ignored_templates_for_this_var,
+            if context.template.engine.debug and exc_info is not None:
+                msg = (
+                    "No `else` statement found for '{{% {ifnode} %}}{{% elif ... %}}{{% endif %}}' in '{template}'"
+                    "\nSilence this by adding '{ifnode}': ['{template}'] to the settings.SHOUTY_VARIABLE_BLACKLIST dictionary.".format(
+                        ifnode=whole_var, template=template_name
                     )
-                elif template_name in ignored_templates_for_this_var:
-                    logger.debug(
-                        "Ignoring '%s' for template '%s' (of %s)",
-                        whole_var,
-                        template_name,
-                        ignored_templates_for_this_var,
-                    )
-                elif any(x in ignored_templates_for_this_var for x in all_template_names):
-                    logger.debug(
-                        "Ignoring '%s' for template '%s' (of %s)",
-                        whole_var,
-                        template_name,
-                        all_template_names,
-                    )
-                elif any(x in ignored_templates_for_any_var for x in all_template_names):
-                    logger.debug(
-                        "Ignoring '%s' for template '%s' (of %s) due to * over %s",
-                        whole_var,
-                        template_name,
-                        all_template_names,
-                        ignored_templates_for_any_var,
-                    )
-                elif template_name in ignored_templates_for_any_var:
-                    logger.debug(
-                        "Ignoring '%s' for template '%s' (of %s) due to * over %s",
-                        whole_var,
-                        template_name,
-                        all_template_names,
-                        ignored_templates_for_any_var,
-                    )
-            elif context.template.engine.debug and exc_info is not None:
+                )
+                exc = MissingVariable(
+                    msg,
+                    token=whole_var,
+                    template_name=template_name,
+                    all_template_names=all_template_names,
+                )
                 exc_info["message"] = msg
                 exc.template_debug = exc_info
-                raise exc
-    result = old_if_render(self, context)
-    if result == "":
-        conditions_seen = set()  # type: Set[TemplateLiteral]
-        conditions = []  # type: List[TemplateLiteral]
+                if not is_silenced(
+                    whole_var,
+                    exc.template_name,
+                    blacklist,
+                    exc.all_template_names,
+                ):
+                    raise exc
 
-        def extract_first_second_from_branch(_cond):
-            # type: (Any) -> Iterator[TemplateLiteral]
-            first = getattr(_cond, "first", None)
-            second = getattr(_cond, "second", None)
-            if first is not None and first:
-                for subcond in extract_first_second_from_branch(first):
-                    yield subcond
-            if second is not None and second:
-                for subcond in extract_first_second_from_branch(second):
-                    yield subcond
-            if first is None and second is None:
-                yield _cond
+    # I need to collect all the conditions from all the nodelists BEFORE calling
+    # the original render method, to allow for peeking at which nodelist was
+    # rendered. When exhaustive {% if %}{% elif %} checking occurs and FORCES
+    # an else condition, that else condition may something other than "", so requires
+    # knowing that the ELSE nodelist was the one which was rendered, whilst
+    # still collecting the individual conditions that made up all the if components
+    # to check which ones failed with a MissingVariable exception rather than just
+    # evaluating falsy...
+    conditions_seen = set()  # type: Set[TemplateLiteral]
+    conditions = []  # type: List[TemplateLiteral]
 
-        for index, condition_nodelist in enumerate(self.conditions_nodelists, start=1):
-            condition, nodelist = condition_nodelist
-            if condition is not None:
-                for _cond in extract_first_second_from_branch(condition):
-                    if _cond not in conditions_seen:
-                        conditions.append(_cond)
-                        conditions_seen.add(_cond)
-        for condition in conditions:
-            if hasattr(condition, "value") and hasattr(condition.value, "resolve"):
-                try:
-                    condition.value.resolve(context)
-                except Exception as e:
-                    if isinstance(e, MissingVariable):
-                        raise
-    return result
+    def extract_first_second_from_branch(_cond):
+        # type: (Any) -> Iterator[TemplateLiteral]
+        first = getattr(_cond, "first", None)
+        second = getattr(_cond, "second", None)
+        if first is not None and first:
+            for subcond in extract_first_second_from_branch(first):
+                yield subcond
+        if second is not None and second:
+            for subcond in extract_first_second_from_branch(second):
+                yield subcond
+        if first is None and second is None:
+            yield _cond
+
+    for index, condition_nodelist in enumerate(self.conditions_nodelists, start=1):
+        condition, nodelist = condition_nodelist
+        if condition is not None:
+            for _cond in extract_first_second_from_branch(condition):
+                if _cond not in conditions_seen:
+                    conditions.append(_cond)
+                    conditions_seen.add(_cond)
+
+    for condition in conditions:
+        if hasattr(condition, "value") and hasattr(condition.value, "resolve"):
+            condition.value.resolve(context)
+
+    return old_if_render(self, context)
 
 
 URL_BLACKLIST = (
@@ -737,9 +747,7 @@ def new_url_render(self, context):
                     template_name,
                     exc_info,
                     all_template_names,
-                ) = create_exception_with_template_debug(
-                    context, outvar, MissingVariable
-                )
+                ) = create_exception_with_template_debug(context, outvar, self)
             except Exception as e2:
                 logger.warning(
                     "failed to create template_debug information", exc_info=e2
@@ -748,11 +756,20 @@ def new_url_render(self, context):
                 # just carry on and let Django try for itself to set up relevant
                 # debug info
                 template_name = UNKNOWN_SOURCE
+                all_template_names = [template_name]
                 exc_info = {}
             msg = "{{% url {token!s} ... as {asvar!s} %}} in template '{template} did not resolve.\nYou may silence this globally by adding {key!r} to settings.SHOUTY_URL_BLACKLIST".format(
-                token=self.view_name, asvar=outvar, key=key, template=template_name,
+                token=self.view_name,
+                asvar=outvar,
+                key=key,
+                template=template_name,
             )
-            exc = MissingVariable(msg)
+            exc = MissingVariable(
+                msg,
+                token=key,
+                template_name=template_name,
+                all_template_names=all_template_names,
+            )
             if context.template.engine.debug and exc_info is not None:
                 exc_info["message"] = msg
                 exc.template_debug = exc_info
@@ -771,12 +788,17 @@ def patch(invalid_variables, invalid_urls):
 
     Calling it multiple times should be a no-op
     """
+    if not settings.DEBUG:
+        return False
+
     if invalid_variables is True:
         patched_var = getattr(Variable, "_shouty", False)
         if patched_var is False:
             Variable._resolve_lookup = new_resolve_lookup
             Variable._shouty = True
 
+        # Provides exhaustive if/elif/else checking as well as all conditional
+        # in context checking ...
         patched_if = getattr(IfNode, "_shouty", False)
         if patched_if is False:
             IfNode.render = new_if_render
@@ -901,9 +923,9 @@ class Shout(AppConfig):  # type: ignore
 
 default_app_config = "shouty.Shout"
 
-
 if __name__ == "__main__":
-    import sys, os
+    import os
+
     try:
         import coverage
     except ImportError:
@@ -911,7 +933,9 @@ if __name__ == "__main__":
         cov = None
     else:
         sys.stdout.write("using coverage\n")
-        cov = coverage.Coverage(include=['shouty.py'], branch=True, check_preimported=True)
+        cov = coverage.Coverage(
+            include=["shouty.py"], branch=True, check_preimported=True
+        )
         cov.start()
     from unittest import skipIf
     from contextlib import contextmanager
@@ -933,6 +957,7 @@ if __name__ == "__main__":
         pass
     try:
         import crispy_forms
+
         EXTRA_INSTALLED_APPS += ("crispy_forms",)
     except ImportError:
         pass
@@ -972,6 +997,7 @@ if __name__ == "__main__":
             ]
         }
     test_settings.configure(
+        DEBUG=True,
         SECRET_KEY="test-test-test-test-test-test-test-test-test-test-test-test",
         DATABASES={
             "default": {"ENGINE": "django.db.backends.sqlite3", "NAME": ":memory:"}
@@ -995,6 +1021,7 @@ if __name__ == "__main__":
                     "context_processors": (
                         "django.contrib.auth.context_processors.auth",
                         "django.contrib.messages.context_processors.messages",
+                        "django.template.context_processors.request",
                     )
                 },
             },
@@ -1013,11 +1040,14 @@ if __name__ == "__main__":
             "handlers": {
                 "console": {"class": "logging.StreamHandler", "formatter": "console"},
             },
-            "root": {"handlers": ["console"], "level": "ERROR",},
+            "root": {
+                "handlers": ["console"],
+                "level": "ERROR",
+            },
             "loggers": {
                 "shouty": {
                     "handlers": ["console"],
-                    "level": os.environ.get("SHOUTY_LOGGING", "WARNING"),
+                    "level": os.environ.get("SHOUTY_LOGGING", "WARNING").upper(),
                     "propagate": False,
                 },
                 "django.request": {
@@ -1059,12 +1089,22 @@ if __name__ == "__main__":
                 yield
             except exception_type as exc:
                 self.assertIn(str(exception_repr), str(exc))  # type: ignore
-                req = RequestFactory().get('/')
-                reporter = ExceptionReporter(request=req, exc_type=exception_type, exc_value=exc, tb=None, is_email=True)
+                req = RequestFactory().get("/")
+                reporter = ExceptionReporter(
+                    request=req,
+                    exc_type=exception_type,
+                    exc_value=exc,
+                    tb=None,
+                    is_email=True,
+                )
                 traceback_data = reporter.get_traceback_data()
-                template_debug = traceback_data.get('template_info', {})  # type: Dict[Text, Any]
+                template_debug = traceback_data.get(
+                    "template_info", {}
+                )  # type: Dict[Text, Any]
                 if template_debug == {}:  # type: ignore
-                    self.fail("Missing template_debug attribute from {}".format(exc))  # type: ignore
+                    self.fail(
+                        "Missing template_debug attribute from {}".format(exc)
+                    )  # type: ignore
                 if not debug_data:
                     self.fail(  # type: ignore
                         "No data provided to check against {}".format(template_debug)
@@ -1073,7 +1113,9 @@ if __name__ == "__main__":
                 expected = {}
                 found = {}
                 for expected_key, expected_value in debug_data.items():
-                    self.assertIn(expected_key, set(template_debug.keys()))  # type: ignore
+                    self.assertIn(
+                        expected_key, set(template_debug.keys())
+                    )  # type: ignore
                     found_value = template_debug[expected_key]
                     if expected_value != found_value:
                         expected[expected_key] = expected_value
@@ -1089,7 +1131,9 @@ if __name__ == "__main__":
                 if expected and found:
                     self.fail(  # type: ignore
                         "Found template_debug data {found!r} instead of {expected!r}\nOther possible keys include: {others!r}".format(
-                            found=found, expected=expected, others=other_keys,
+                            found=found,
+                            expected=expected,
+                            others=other_keys,
                         )
                     )
             else:
@@ -1106,6 +1150,7 @@ if __name__ == "__main__":
 
             self.MissingVariable = MissingVariable
 
+        @override_settings(DEBUG=True)
         def test_most_basic(self):
             # type: () -> None
             t = TMPL(
@@ -1118,11 +1163,13 @@ if __name__ == "__main__":
                 self.MissingVariable,
                 "Variable 'b' in template '<unknown source>' does not resolve.\n"
                 "Possibly you meant to use 'be'.\n"
-                "You may silence this globally by adding 'b' to the settings.SHOUTY_VARIABLE_BLACKLIST iterable.",
+                "Silence this occurance only by adding 'b': ['<unknown source>'] to the settings.SHOUTY_VARIABLE_BLACKLIST dictionary.\n"
+                "Silence this globally by adding 'b': ['*'] to the settings.SHOUTY_VARIABLE_BLACKLIST dictionary.",
                 {"line": 3, "start": 76, "end": 77, "during": "b"},
             ):
                 t.render(CTX({"a": 1, "be": 2}))
 
+        @override_settings(DEBUG=True)
         def test_nested_tokens_on_dict(self):
             # type: () -> None
             t = TMPL(
@@ -1137,11 +1184,13 @@ if __name__ == "__main__":
                 self.MissingVariable,
                 "Token 'c' of 'a.b.c' in template '<unknown source>' does not resolve.\n"
                 "Possibly you meant to use 'cd'.\n"
-                "You may silence this globally by adding 'a.b.c' to the settings.SHOUTY_VARIABLE_BLACKLIST iterable.",
+                "Silence this occurance only by adding 'a.b.c': ['<unknown source>'] to the settings.SHOUTY_VARIABLE_BLACKLIST dictionary.\n"
+                "Silence this globally by adding 'a.b.c': ['*'] to the settings.SHOUTY_VARIABLE_BLACKLIST dictionary.",
                 {"line": 4, "start": 114, "end": 119, "during": "a.b.c"},
             ):
                 t.render(CTX({"a": {"b": {"cd": 1}}}))
 
+        @override_settings(DEBUG=True)
         def test_nested_tokens_on_namedtuple(self):
             # type: () -> None
             t = TMPL(
@@ -1156,11 +1205,13 @@ if __name__ == "__main__":
                 self.MissingVariable,
                 "Token 'c' of 'a.b.c' in template '<unknown source>' does not resolve.\n"
                 "Possibly you meant one of: 'cg', 'cf', 'ce'.\n"
-                "You may silence this globally by adding 'a.b.c' to the settings.SHOUTY_VARIABLE_BLACKLIST iterable.",
+                "Silence this occurance only by adding 'a.b.c': ['<unknown source>'] to the settings.SHOUTY_VARIABLE_BLACKLIST dictionary.\n"
+                "Silence this globally by adding 'a.b.c': ['*'] to the settings.SHOUTY_VARIABLE_BLACKLIST dictionary.",
                 {"line": 4, "start": 118, "end": 123, "during": "a.b.c"},
             ):
                 t.render(CTX({"a": {"b": nt}}))
 
+        @override_settings(DEBUG=True)
         def test_index(self):
             # type: () -> None
             t = TMPL(
@@ -1173,11 +1224,13 @@ if __name__ == "__main__":
                 self.MissingVariable,
                 "Token '11' of 'a.11' in template '<unknown source>' does not resolve.\n"
                 "Possibly you meant to use '1'.\n"
-                "You may silence this globally by adding 'a.11' to the settings.SHOUTY_VARIABLE_BLACKLIST iterable.",
+                "Silence this occurance only by adding 'a.11': ['<unknown source>'] to the settings.SHOUTY_VARIABLE_BLACKLIST dictionary.\n"
+                "Silence this globally by adding 'a.11': ['*'] to the settings.SHOUTY_VARIABLE_BLACKLIST dictionary.",
                 {"line": 3, "start": 76, "end": 80, "during": "a.11"},
             ):
                 t.render(CTX({"a": (1, 2)}))
 
+        @override_settings(DEBUG=True)
         def test_nested_templates(self):
             # type: () -> None
             t = TMPL(
@@ -1195,11 +1248,13 @@ if __name__ == "__main__":
             with self.assertRaisesWithTemplateDebug(
                 self.MissingVariable,
                 "Variable 'c' in template '<unknown source>' does not resolve.\n"
-                "You may silence this globally by adding 'c' to the settings.SHOUTY_VARIABLE_BLACKLIST iterable.",
+                "Silence this occurance only by adding 'c': ['<unknown source>'] to the settings.SHOUTY_VARIABLE_BLACKLIST dictionary.\n"
+                "Silence this globally by adding 'c': ['*'] to the settings.SHOUTY_VARIABLE_BLACKLIST dictionary.",
                 {"start": 73, "end": 74, "during": "c"},
             ):
                 t.render(CTX({"a": 1, "subtemplate": st, "b": 2}))
 
+        @override_settings(DEBUG=True)
         def test_form_possibilities(self):
             # type: () -> None
             t = TMPL(
@@ -1215,11 +1270,13 @@ if __name__ == "__main__":
                 self.MissingVariable,
                 "Token 'exampl' of 'form.exampl' in template '<unknown source>' does not resolve.\n"
                 "Possibly you meant to use 'example'.\n"
-                "You may silence this globally by adding 'form.exampl' to the settings.SHOUTY_VARIABLE_BLACKLIST iterable.",
+                "Silence this occurance only by adding 'form.exampl': ['<unknown source>'] to the settings.SHOUTY_VARIABLE_BLACKLIST dictionary.\n"
+                "Silence this globally by adding 'form.exampl': ['*'] to the settings.SHOUTY_VARIABLE_BLACKLIST dictionary.",
                 {"start": 20, "end": 31, "during": "form.exampl"},
             ):
                 t.render(CTX({"form": MyForm(data={"example": "1"})}))
 
+        @override_settings(DEBUG=True)
         def test_model_possibilities(self):
             # type: () -> None
             t = TMPL(
@@ -1244,11 +1301,13 @@ if __name__ == "__main__":
                 self.MissingVariable,
                 "Token 'object_i' of 'obj.object_i' in template '<unknown source>' does not resolve.\n"
                 "Possibly you meant one of: 'object_id', 'objects', 'object_repr'.\n"
-                "You may silence this globally by adding 'obj.object_i' to the settings.SHOUTY_VARIABLE_BLACKLIST iterable.",
+                "Silence this occurance only by adding 'obj.object_i': ['<unknown source>'] to the settings.SHOUTY_VARIABLE_BLACKLIST dictionary.\n"
+                "Silence this globally by adding 'obj.object_i': ['*'] to the settings.SHOUTY_VARIABLE_BLACKLIST dictionary.",
                 {"start": 20, "end": 32, "during": "obj.object_i"},
             ):
                 t.render(CTX({"obj": example}))
 
+        @override_settings(DEBUG=True)
         def test_model_related_possibilities(self):
             # type: () -> None
             t = TMPL(
@@ -1265,11 +1324,13 @@ if __name__ == "__main__":
                 self.MissingVariable,
                 "Token 'logentry_se' of 'obj.logentry_se.all' in template '<unknown source>' does not resolve.\n"
                 "Possibly you meant to use 'logentry_set'.\n"
-                "You may silence this globally by adding 'obj.logentry_se.all' to the settings.SHOUTY_VARIABLE_BLACKLIST iterable.",
+                "Silence this occurance only by adding 'obj.logentry_se.all': ['<unknown source>'] to the settings.SHOUTY_VARIABLE_BLACKLIST dictionary.\n"
+                "Silence this globally by adding 'obj.logentry_se.all': ['*'] to the settings.SHOUTY_VARIABLE_BLACKLIST dictionary.",
                 {"start": 20, "end": 39, "during": "obj.logentry_se.all"},
             ):
                 t.render(CTX({"obj": user}))
 
+        @override_settings(DEBUG=True)
         def test_for_loop(self):
             # type: () -> None
             t = TMPL(
@@ -1277,7 +1338,7 @@ if __name__ == "__main__":
                 {% for x in chef.can_add_cakes %}
                 {{ x }}
                 {% endfor %}
-                
+
                 {% for x in chef.can_add_pastry %}
                 {{ x }}
                 {% endfor %}
@@ -1292,11 +1353,13 @@ if __name__ == "__main__":
                 self.MissingVariable,
                 "Token 'can_add_pastry' of 'chef.can_add_pastry' in template '<unknown source>' does not resolve.\n"
                 "Possibly you meant one of: 'can_add_pastries', 'can_add_cakes'.\n"
-                "You may silence this globally by adding 'chef.can_add_pastry' to the settings.SHOUTY_VARIABLE_BLACKLIST iterable.",
-                {"start": 149, "end": 168, "during": "chef.can_add_pastry"},
+                "Silence this occurance only by adding 'chef.can_add_pastry': ['<unknown source>'] to the settings.SHOUTY_VARIABLE_BLACKLIST dictionary.\n"
+                "Silence this globally by adding 'chef.can_add_pastry': ['*'] to the settings.SHOUTY_VARIABLE_BLACKLIST dictionary.",
+                {"start": 133, "end": 152, "during": "chef.can_add_pastry"},
             ):
                 t.render(CTX({"chef": Chef()}))
 
+        @override_settings(DEBUG=True)
         def test_multiple_variables_in_if_stmt_and_only_some_resolve(self):
             # type: () -> None
             t = TMPL(
@@ -1315,11 +1378,13 @@ if __name__ == "__main__":
                 self.MissingVariable,
                 "Token 'can_add_pastry' of 'chef.can_add_pastry' in template '<unknown source>' does not resolve.\n"
                 "Possibly you meant one of: 'can_add_pastries', 'can_add_cakes'.\n"
-                "You may silence this globally by adding 'chef.can_add_pastry' to the settings.SHOUTY_VARIABLE_BLACKLIST iterable.",
+                "Silence this occurance only by adding 'chef.can_add_pastry': ['<unknown source>'] to the settings.SHOUTY_VARIABLE_BLACKLIST dictionary.\n"
+                "Silence this globally by adding 'chef.can_add_pastry': ['*'] to the settings.SHOUTY_VARIABLE_BLACKLIST dictionary.",
                 {"start": 46, "end": 65, "during": "chef.can_add_pastry"},
             ):
                 t.render(CTX({"chef": Chef()}))
 
+        @override_settings(DEBUG=True)
         def test_many_if_variables1(self):
             # type: () -> None
             t = TMPL(
@@ -1332,11 +1397,13 @@ if __name__ == "__main__":
             with self.assertRaisesWithTemplateDebug(
                 self.MissingVariable,
                 "Variable 'wheee' in template '<unknown source>' does not resolve.\n"
-                "You may silence this globally by adding 'wheee' to the settings.SHOUTY_VARIABLE_BLACKLIST iterable.",
+                "Silence this occurance only by adding 'wheee': ['<unknown source>'] to the settings.SHOUTY_VARIABLE_BLACKLIST dictionary.\n"
+                "Silence this globally by adding 'wheee': ['*'] to the settings.SHOUTY_VARIABLE_BLACKLIST dictionary.",
                 {"start": 59, "end": 64, "during": "wheee"},
             ):
                 t.render(CTX({"whooo": 0}))
 
+        @override_settings(DEBUG=True)
         def test_many_if_variables2(self):
             # type: () -> None
             t = TMPL(
@@ -1349,12 +1416,39 @@ if __name__ == "__main__":
             with self.assertRaisesWithTemplateDebug(
                 self.MissingVariable,
                 "Variable 'whooo' in template '<unknown source>' does not resolve.\n"
-                "You may silence this globally by adding 'whooo' to the settings.SHOUTY_VARIABLE_BLACKLIST iterable.",
+                "Silence this occurance only by adding 'whooo': ['<unknown source>'] to the settings.SHOUTY_VARIABLE_BLACKLIST dictionary.\n"
+                "Silence this globally by adding 'whooo': ['*'] to the settings.SHOUTY_VARIABLE_BLACKLIST dictionary.",
                 {"start": 33, "end": 38, "during": "whooo"},
             ):
                 t.render(CTX({}))
 
+        @override_settings(DEBUG=True)
         def test_if_elif(self):
+            # type: () -> None
+            t = TMPL(
+                """
+                {% if 1 == 2 %}
+                whee
+                {% elif 2 == 3 %}
+                whoo
+                {% elif x == 4 %}
+                wiggle
+                {% else %}
+                <!-- exhaustive if checking -->
+                {% endif %}
+                """
+            )
+            with self.assertRaisesWithTemplateDebug(
+                self.MissingVariable,
+                "Variable 'x' in template '<unknown source>' does not resolve.\n"
+                "Silence this occurance only by adding 'x': ['<unknown source>'] to the settings.SHOUTY_VARIABLE_BLACKLIST dictionary.\n"
+                "Silence this globally by adding 'x': ['*'] to the settings.SHOUTY_VARIABLE_BLACKLIST dictionary.",
+                {"start": 133, "end": 134, "during": "x"},
+            ):
+                t.render(CTX({}))
+
+        @override_settings(DEBUG=True)
+        def test_if_elif_exhaustiveness(self):
             # type: () -> None
             t = TMPL(
                 """
@@ -1369,12 +1463,13 @@ if __name__ == "__main__":
             )
             with self.assertRaisesWithTemplateDebug(
                 self.MissingVariable,
-                "Variable 'x' in template '<unknown source>' does not resolve.\n"
-                "You may silence this globally by adding 'x' to the settings.SHOUTY_VARIABLE_BLACKLIST iterable.",
-                {"start": 133, "end": 134, "during": "x"},
+                "No `else` statement found for '{% if 1 == 2 %}{% elif ... %}{% endif %}' in '<unknown source>'\n"
+                "Silence this by adding 'if 1 == 2': ['<unknown source>'] to the settings.SHOUTY_VARIABLE_BLACKLIST dictionary.",
+                {"start": 20, "end": 29, "during": "if 1 == 2"},
             ):
                 t.render(CTX({}))
 
+        @override_settings(DEBUG=True)
         def test_exception_debug_info(self):
             # type: () -> None
             t = TMPL(
@@ -1383,17 +1478,21 @@ if __name__ == "__main__":
                 {{ abc }}
                 {% elif y == z %}
                 {{ def }}
+                {% else %}
+                <!-- exhaustive if checking -->
                 {% endif %}
                 """
             )
             with self.assertRaisesWithTemplateDebug(
-                    self.MissingVariable,
-                    "Variable 'abc' in template '<unknown source>' does not resolve.\n"
-                    "You may silence this globally by adding 'abc' to the settings.SHOUTY_VARIABLE_BLACKLIST iterable.",
-                    {"line": 3, "during": "abc", "name": UNKNOWN_SOURCE},
+                self.MissingVariable,
+                "Variable 'z' in template '<unknown source>' does not resolve.\n"
+                "Silence this occurance only by adding 'z': ['<unknown source>'] to the settings.SHOUTY_VARIABLE_BLACKLIST dictionary.\n"
+                "Silence this globally by adding 'z': ['*'] to the settings.SHOUTY_VARIABLE_BLACKLIST dictionary.",
+                {"line": 4, "during": "z", "name": UNKNOWN_SOURCE},
             ):
                 t.render(CTX({"x": 1, "y": 1, "def": 2}))
 
+        @override_settings(DEBUG=True)
         def test_complex_exception_debug_info(self):
             # type: () -> None
             t = TMPL(
@@ -1415,11 +1514,13 @@ if __name__ == "__main__":
             with self.assertRaisesWithTemplateDebug(
                 self.MissingVariable,
                 "Variable 'wheee' in template 'parent' does not resolve.\n"
-                "You may silence this globally by adding 'wheee' to the settings.SHOUTY_VARIABLE_BLACKLIST iterable.",
+                "Silence this occurance only by adding 'wheee': ['parent'] to the settings.SHOUTY_VARIABLE_BLACKLIST dictionary.\n"
+                "Silence this globally by adding 'wheee': ['*'] to the settings.SHOUTY_VARIABLE_BLACKLIST dictionary.",
                 {"start": 141, "end": 146, "during": "wheee"},
             ):
                 t.render(CTX({"subtemplate": st}))
 
+        @override_settings(DEBUG=True)
         def test_how_default_filters_work(self):
             # type: () -> None
             """
@@ -1439,11 +1540,11 @@ if __name__ == "__main__":
                 self.MissingVariable,
                 "Variable 'doesnt_exist' in template '<unknown source>' does not resolve.\n"
                 "Possibly you meant to use 'doesntexist'.\n"
-                "You may silence this globally by adding 'doesnt_exist' to the settings.SHOUTY_VARIABLE_BLACKLIST iterable.",
+                "Silence this occurance only by adding 'doesnt_exist': ['<unknown source>'] to the settings.SHOUTY_VARIABLE_BLACKLIST dictionary.\n"
+                "Silence this globally by adding 'doesnt_exist': ['*'] to the settings.SHOUTY_VARIABLE_BLACKLIST dictionary.",
                 {"line": 3, "start": 76, "end": 88, "during": "doesnt_exist"},
             ):
                 t.render(CTX({"a": 1, "doesntexist": 2}))
-
 
     class UrlTestCase(CustomAssertions, SimpleTestCase):  # type: ignore
         def setUp(self):
@@ -1452,6 +1553,7 @@ if __name__ == "__main__":
 
             self.MissingVariable = MissingVariable
 
+        @override_settings(DEBUG=True)
         def test_most_basic(self):
             # type: () -> None
             t = TMPL(
@@ -1510,7 +1612,8 @@ if __name__ == "__main__":
             # type: () -> None
             with override_settings(SHOUTY_VARIABLE_BLACKLIST=(1,)):
                 self.assertEqual(
-                    check_user_blacklists(None)[0].msg, "Expected 1 to be a string",
+                    check_user_blacklists(None)[0].msg,
+                    "Expected 1 to be a string",
                 )
 
         def test_magic_variable_must_have_templates_specified(self):
@@ -1555,15 +1658,24 @@ if __name__ == "__main__":
 
         def test_silencing_variations_for_a_single_blacklisted_item(self):
             # type: () -> None
-            """ Adding a variable to the blacklist works OK """
-            t = TMPL("this works: {{ a }}")
-            with override_settings(SHOUTY_VARIABLE_BLACKLIST=("a",)):
+            """Adding a variable to the blacklist works OK"""
+            with override_settings(SHOUTY_VARIABLE_BLACKLIST=("a",), DEBUG=True):
+                t = TMPL("this works: {{ a }}")
                 t.render(CTX({}))
-            with override_settings(SHOUTY_VARIABLE_BLACKLIST={"a": [UNKNOWN_SOURCE]}):
+            with override_settings(
+                SHOUTY_VARIABLE_BLACKLIST={"a": [UNKNOWN_SOURCE]}, DEBUG=True
+            ):
+                t = TMPL("this works: {{ a }}")
                 t.render(CTX({}))
-            with override_settings(SHOUTY_VARIABLE_BLACKLIST={"a": [ANY_TEMPLATE]}):
+            with override_settings(
+                SHOUTY_VARIABLE_BLACKLIST={"a": [ANY_TEMPLATE]}, DEBUG=True
+            ):
+                t = TMPL("this works: {{ a }}")
                 t.render(CTX({}))
-            with override_settings(SHOUTY_VARIABLE_BLACKLIST={"a": ["test.html"]}):
+            with override_settings(
+                SHOUTY_VARIABLE_BLACKLIST={"a": ["test.html"]}, DEBUG=True
+            ):
+                t = TMPL("this works: {{ a }}")
                 with self.assertRaises(self.MissingVariable):
                     t.render(CTX({}))
 
@@ -1574,20 +1686,22 @@ if __name__ == "__main__":
             https://github.com/kezabelle/django-shouty-templates/issues/6
             """
             with override_settings(
-                SHOUTY_VARIABLE_BLACKLIST={ANY_VARIABLE: ["admin/filter.html"]}
+                SHOUTY_VARIABLE_BLACKLIST={ANY_VARIABLE: ["admin/filter.html"]},
+                DEBUG=True,
             ):
                 render_to_string("admin/filter.html")
                 with self.assertRaises(self.MissingVariable):
                     render_to_string("admin/login.html")
 
             with override_settings(
-                SHOUTY_VARIABLE_BLACKLIST={ANY_VARIABLE: ["admin/filter2.html"]}
+                SHOUTY_VARIABLE_BLACKLIST={ANY_VARIABLE: ["admin/filter2.html"]},
+                DEBUG=True,
             ):
                 with self.assertRaisesWithTemplateDebug(
                     self.MissingVariable,
                     "Variable 'title' in template 'admin/filter.html' does not resolve.\n"
-                    "You may silence this globally by adding 'title' to the settings.SHOUTY_VARIABLE_BLACKLIST iterable.\n"
-                    "You may silence this occurance only by adding admin/filter.html to the 'title' key to the settings.SHOUTY_VARIABLE_BLACKLIST iterable.",
+                    "Silence this occurance only by adding 'title': ['admin/filter.html'] to the settings.SHOUTY_VARIABLE_BLACKLIST dictionary.\n"
+                    "Silence this globally by adding 'title': ['*'] to the settings.SHOUTY_VARIABLE_BLACKLIST dictionary.",
                     {"during": "title"},
                 ):
                     render_to_string("admin/filter.html")
@@ -1599,6 +1713,7 @@ if __name__ == "__main__":
 
             self.MissingVariable = MissingVariable
 
+        @override_settings(DEBUG=True)
         def test_chef_renamed_to_sous_chef(self):
             # type: () -> None
             t = TMPL(
@@ -1617,11 +1732,13 @@ if __name__ == "__main__":
                 self.MissingVariable,
                 "Token 'chef' of 'chef.can_add_cakes' in template '<unknown source>' does not resolve.\n"
                 "Possibly you meant to use 'sous_chef'.\n"
-                "You may silence this globally by adding 'chef.can_add_cakes' to the settings.SHOUTY_VARIABLE_BLACKLIST iterable.",
+                "Silence this occurance only by adding 'chef.can_add_cakes': ['<unknown source>'] to the settings.SHOUTY_VARIABLE_BLACKLIST dictionary.\n"
+                "Silence this globally by adding 'chef.can_add_cakes': ['*'] to the settings.SHOUTY_VARIABLE_BLACKLIST dictionary.",
                 {"start": 23, "during": "chef.can_add_cakes", "end": 41},
             ):
                 t.render(CTX({"sous_chef": Chef()}))
 
+        @override_settings(DEBUG=True)
         def test_is_cake_chef_renamed_to_is_pastry_king(self):
             # type: () -> None
             t = TMPL(
@@ -1639,11 +1756,13 @@ if __name__ == "__main__":
             with self.assertRaisesWithTemplateDebug(
                 self.MissingVariable,
                 "Token 'is_cake_chef' of 'chef.is_cake_chef' in template '<unknown source>' does not resolve.\n"
-                "You may silence this globally by adding 'chef.is_cake_chef' to the settings.SHOUTY_VARIABLE_BLACKLIST iterable.",
+                "Silence this occurance only by adding 'chef.is_cake_chef': ['<unknown source>'] to the settings.SHOUTY_VARIABLE_BLACKLIST dictionary.\n"
+                "Silence this globally by adding 'chef.is_cake_chef': ['*'] to the settings.SHOUTY_VARIABLE_BLACKLIST dictionary.",
                 {"start": 94, "during": "chef.is_cake_chef", "end": 111},
             ):
                 t.render(CTX({"chef": Chef()}))
 
+        @override_settings(DEBUG=True)
         def test_can_add_cakes_renamed_to_can_add_pastries(self):
             # type: () -> None
             t = TMPL(
@@ -1665,7 +1784,8 @@ if __name__ == "__main__":
                 self.MissingVariable,
                 "Token 'can_add_cakes' of 'chef.can_add_cakes' in template '<unknown source>' does not resolve.\n"
                 "Possibly you meant to use 'can_add_pastries'.\n"
-                "You may silence this globally by adding 'chef.can_add_cakes' to the settings.SHOUTY_VARIABLE_BLACKLIST iterable.",
+                "Silence this occurance only by adding 'chef.can_add_cakes': ['<unknown source>'] to the settings.SHOUTY_VARIABLE_BLACKLIST dictionary.\n"
+                "Silence this globally by adding 'chef.can_add_cakes': ['*'] to the settings.SHOUTY_VARIABLE_BLACKLIST dictionary.",
                 {"start": 23, "during": "chef.can_add_cakes", "end": 41},
             ):
                 t.render(CTX({"chef": Chef()}))
@@ -1682,9 +1802,10 @@ if __name__ == "__main__":
             )
             self.client.force_login(self.user)
 
+        @override_settings(DEBUG=True)
         def test_admin_login_page_without_being_logged_in(self):
             # type: () -> None
-            """ The admin login screen should not raise MissingVariable, regardless of authentication state """
+            """The admin login screen should not raise MissingVariable, regardless of authentication state"""
             self.client.logout()
             r1 = self.client.get("/admin/")
             self.assertStatusCode(r1, 302)
@@ -1695,9 +1816,10 @@ if __name__ == "__main__":
             hasattr(TestCase, "subTest") is False,
             "using subTest requires running under Python 3+",
         )
+        @override_settings(DEBUG=True)
         def test_get_requests_which_should_render_ok(self):
             # type: () -> None
-            """ normal requests to these admin & admindocs pages should not raise MissingVariable """
+            """normal requests to these admin & admindocs pages should not raise MissingVariable"""
             urls = (
                 "/admin/doc/",
                 "/admin/doc/tags/",
@@ -1738,7 +1860,7 @@ if __name__ == "__main__":
 
         def test_example_404(self):
             # type: () -> None
-            """ The technical 404 page should not itself cause a 500 error """
+            """The technical 404 page should not itself cause a 500 error"""
             with override_settings(DEBUG=True):
                 response = self.client.get("/favicon.ico", follow=False)
                 self.assertStatusCode(response, 404)
@@ -1759,7 +1881,7 @@ if __name__ == "__main__":
         )
         def test_admin_honeypot_should_render_ok(self):
             # type: () -> None
-            """ Versions <= 1.1.0 don't set 'site_title' or 'site_header' variables """
+            """Versions <= 1.1.0 don't set 'site_title' or 'site_header' variables"""
             response = self.client.get("/admin_honeypot/login/", follow=False)
             self.assertStatusCode(response, 200)
 
@@ -1942,7 +2064,10 @@ if __name__ == "__main__":
             for test_case in test_cases.values()
         )
 
-    failures = test_runner.run_tests(test_labels=(), extra_tests=test_cases_to_run,)
+    failures = test_runner.run_tests(
+        test_labels=(),
+        extra_tests=test_cases_to_run,
+    )
     if cov is not None:
         sys.stdout.write("Writing coverage report\n")
         cov.stop()

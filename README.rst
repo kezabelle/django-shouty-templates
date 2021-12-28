@@ -21,7 +21,7 @@ Given a template like this::
         <label class="alert alert-{{ chef.is_cake_chef|yesno:"success,danger,default" }}
     {% endif %}
 
-everything works fine, until any of the following happens:
+everything works fine, until you refactor and any of the following happens:
 
 - ``chef`` is no longer the name of the variable.
 - ``can_add_cakes`` is refactored to be called ``can_add_pastries``
@@ -44,8 +44,8 @@ The exception itself would look something like::
 
     Token 'chef' of 'chef.can_add_cakes' in template 'my/cool/template.html' does not resolve.
     Possibly you meant to use 'sous_chef'.
-    You may silence this globally by adding 'chef.can_add_cakes' to the settings.SHOUTY_VARIABLE_BLACKLIST iterable.
-    You may silence this occurance only by adding 'my/cool/template.html' to the 'chef.can_add_cakes' key to the settings.SHOUTY_VARIABLE_BLACKLIST iterable.
+    Silence this occurance only by adding 'chef.can_add_cakes': ['my/cool/template.html'] to the settings.SHOUTY_VARIABLE_BLACKLIST dictionary.
+    Silence this globally by adding 'chef.can_add_cakes': ['*'] to the settings.SHOUTY_VARIABLE_BLACKLIST dictionary.
 
 
 Setup
@@ -85,11 +85,7 @@ settings.SHOUTY_VARIABLE_BLACKLIST
 Useful for if you are trying to fix up an existing project, or ignore problems
 in third-party templates.
 
-Expects a ``tuple`` of ``str`` where each one represents a template usage to ignore::
-
-    SHOUTY_VARIABLE_BLACKLIST = ("chef.can_add_cakes", "my_sometimes_set_variable")
-
-May also be a ``dict`` of ``str`` keys and a sequence (eg: ``tuple`` or ``list``) of templates in which to ignore it::
+Expects a ``dict`` of ``str`` keys and a sequence (eg: ``tuple`` or ``list``) of templates in which to ignore it::
 
     SHOUTY_VARIABLE_BLACKLIST = {
         "chef.can_add_cakes": ("*",),
@@ -125,6 +121,14 @@ Default configuration
 
 There's a hard-coded blacklist of variables and URLs to make sure the Django admin (+ admindocs),
 django-debug-toolbar, django-pipeline, django-admin-honeypot, djangorestframework, etc all work.
+
+if/elif/else testing
+--------------------
+
+When an ``{% if x %}`` statement is seen in the template, all conditions are checked
+to ensure the context will always resolve correctly. Additionally, if you use ``{% if %}``
+and ``{% elif %}`` together and **don't** have an ``{% else %}`` it'll raise an error
+to remind you to handle that case, even if handling it is just to output nothing.
 
 Tests
 -----
