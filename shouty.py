@@ -1009,7 +1009,7 @@ if __name__ == "__main__":
             "django.contrib.admindocs",
             "django.contrib.sessions",
             "django.contrib.messages",
-            "shouty",
+            "shouty.Shout",
         )
         + EXTRA_INSTALLED_APPS,
         TEMPLATES=[
