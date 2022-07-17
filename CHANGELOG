@@ -1,7 +1,7 @@
 Change history for django-shouty-templates
 ------------------------------------------
 
-?next?
+0.2.0
 ^^^^^^
 * Bugfix: Updates to ostensibly support Django 4.0+
 * Feature: Error loudly when an ``{% if ... %}...{% elif %}`` statement is present without an ``{% else %}``

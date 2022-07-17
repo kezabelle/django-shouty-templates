@@ -2,7 +2,7 @@ django-shouty-templates
 =======================
 
 :author: Keryn Knight
-:version: 0.1.6
+:version: 0.2.0
 
 Brief
 -----
@@ -53,7 +53,7 @@ Setup
 
 This package is available on `PyPI`_ and can be installed using pip or whatever like so::
 
-    pip install django-shouty-templates==0.1.6
+    pip install django-shouty-templates==0.2.0
 
 Then add ``shouty.Shout`` or ``shouty`` to your ``settings.INSTALLED_APPS``
 
