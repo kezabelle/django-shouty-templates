@@ -3,6 +3,8 @@ Change history for django-shouty-templates
 
 ?next?
 ^^^^^^
+* Bugfix: Updates to ostensibly support Django 4.0+
+* Feature: Error loudly when an ``{% if ... %}...{% elif %}`` statement is present without an ``{% else %}``
 * Feature: Allow for silencing **all** missing variables within a single given template (or set of templates)
 * Bugfix: Attempt to fix parsing of where a missing variable occurs within things like ``{% blocktrans with filter_title=title %}``
 * Bugfix: when the ``render_context`` doesn't have a template *or* it's ``None`` it's now properly skipped.
